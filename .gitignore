@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 运行时数据 — 不提交到 git
+imini/monitors/
+imini/events/
+imini/feishu_state.json
+imini/known_ids.json
+imini/orchestrator.log
+imini/bot_server.log
+imini/*.log
+
+k4/campaigns/
+k4/events/
+k4/feishu_state.json
+k4/known_campaigns.json
+k4/orchestrator.log
+k4/bot_server.log
+k4/*.log
+
+# 环境变量文件
+.env
+*.env
+
+# 编辑器
+.DS_Store
+.vscode/
+.idea/
+
+# Claude worktree
+**/.claude/

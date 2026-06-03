@@ -1,0 +1,17 @@
+{
+  "campaign_id": "20260525_artist_signing",
+  "name": "Artist signing event",
+  "poll_interval_seconds": 60,
+  "stop_monitor_at": "2026-05-28T23:59:00+08:00",
+  "events": {
+    "signing": [
+      "https://cn.ktown4u.com/iteminfo?goods_no=000000&eve_no=000000&grp_no=000000",
+      "https://www.ktown4u.com/iteminfo?goods_no=000000&eve_no=000000&grp_no=000000",
+      "https://kr.ktown4u.com/iteminfo?goods_no=000000&eve_no=000000&grp_no=000000",
+      "https://jp.ktown4u.com/iteminfo?goods_no=000000&eve_no=000000&grp_no=000000"
+    ]
+  },
+  "exports": {
+    "signing": "signing_rank.log"
+  }
+}

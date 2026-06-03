@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# 运行时数据（不入库）
+campaigns/
+events/
+*.log
+feishu_state.json
+known_campaigns.json
+
+# 系统
+.DS_Store
+.claude/
