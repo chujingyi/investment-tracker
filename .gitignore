@@ -31,3 +31,4 @@ k4/*.log
 
 # Claude worktree
 **/.claude/
+*.docx
