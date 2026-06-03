@@ -286,6 +286,25 @@ def collect_site_candidates(code: str, site: dict) -> list[dict]:
     return candidates
 
 
+# 类别优先级：同一 productNo 跨站点分类冲突时，取最高优先级的类别
+CLASSIFY_PRIORITY = {"signing": 3, "photo_event": 2, "video_call": 1}
+
+
+def resolve_product_classifications(items: list[dict]) -> dict[int, str]:
+    """同一 productNo 在多个站点可能因 groupName 不同而归入不同类别。
+    例如：签售产品在 GL 的 groupName 是 'Off-Line Sign Event'（→signing），
+    但在 CN/KR/JP 却混在视频通话 group 里（→video_call）。
+    取所有站点中优先级最高的分类，确保签售不会被误归为视频通话。"""
+    best: dict[int, str] = {}
+    for item in items:
+        for product in item["products"]:
+            pno = product["productNo"]
+            cat = classify_product(product)
+            if CLASSIFY_PRIORITY.get(cat, 0) > CLASSIFY_PRIORITY.get(best.get(pno, ""), 0):
+                best[pno] = cat
+    return best
+
+
 def choose_title(items: list[dict]) -> str:
     for preferred in ("gl", "cn", "jp", "kr"):
         for item in items:
@@ -303,12 +322,15 @@ def build_campaign(signature: str, items: list[dict]) -> dict:
     first_date = (normalize_end_date(end_date) or datetime.now().strftime("%Y-%m-%d"))[:10].replace("-", "")
     campaign_id = f"{first_date}_{slugify(title)}_{signature.split(',')[0]}"
 
+    # 跨站点统一分类：同一 productNo 取优先级最高的类别
+    product_category = resolve_product_classifications(items)
+
     events: dict[str, list[str]] = {}
     exports: dict[str, str] = {}
     for item in sorted(items, key=lambda item: item["site"]):
         site = SITES[item["site"]]
         for product in sorted(item["products"], key=lambda product: (product["productNo"], product["groupNo"])):
-            key = classify_product(product)
+            key = product_category.get(product["productNo"]) or classify_product(product)
             events.setdefault(key, []).append(item_url(site, product))
             exports.setdefault(key, f"{key}_rank.log")
 
