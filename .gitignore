@@ -32,3 +32,6 @@ k4/*.log
 # Claude worktree
 **/.claude/
 *.docx
+
+# Tracker 数据库不入库
+tracker/data/*.db

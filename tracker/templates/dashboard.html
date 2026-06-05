@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% block title %}仪表盘{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+  <h5 class="fw-bold mb-0">仪表盘</h5>
+  <div class="text-muted" style="font-size:.85rem;">追踪 AI 推荐的准确率，优化分析框架</div>
+</div>
+
+<!-- Stats row -->
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3">
+    <div class="stat-card">
+      <div class="stat-value text-accent">{{ stats.total }}</div>
+      <div class="stat-label">总推荐数</div>
+      <div class="stat-sub">{{ stats.active }} 个活跃中</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-card">
+      {% if stats.fw_win_rate is not none %}
+      <div class="stat-value {{ 'text-win' if stats.fw_win_rate >= 50 else 'text-loss' }}">
+        {{ stats.fw_win_rate }}%
+      </div>
+      {% else %}
+      <div class="stat-value text-neutral">—</div>
+      {% endif %}
+      <div class="stat-label">框架规则胜率</div>
+      <div class="stat-sub">
+        {% if stats.fw_closed_count %}
+          {{ stats.fw_win_count }}/{{ stats.fw_closed_count }} 已关闭
+        {% else %}
+          暂无已关闭记录
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-card">
+      {% if stats.t21_win_rate is not none %}
+      <div class="stat-value {{ 'text-win' if stats.t21_win_rate >= 50 else 'text-loss' }}">
+        {{ stats.t21_win_rate }}%
+      </div>
+      {% else %}
+      <div class="stat-value text-neutral">—</div>
+      {% endif %}
+      <div class="stat-label">T+21 胜率</div>
+      <div class="stat-sub">
+        {% if stats.t21_eligible_count %}
+          {{ stats.t21_win_count }}/{{ stats.t21_eligible_count }} 满21天
+        {% else %}
+          暂无满21天记录
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="stat-card">
+      <div class="stat-value" style="font-size:1.1rem; padding-top:.5rem;">
+        {% for fw, fs in stats.fw_stats.items() %}
+          {% if fs.total > 0 %}
+          <div class="d-flex justify-content-between align-items-center mb-1">
+            <span class="fw-badge fw-{{ fw }}">{{ fs.name }}</span>
+            <span style="font-size:.85rem;">
+              {{ fs.total }} 条
+              {% if fs.win_rate is not none %}
+              <span class="{{ 'text-win' if fs.win_rate >= 50 else 'text-loss' }}">{{ fs.win_rate }}%</span>
+              {% endif %}
+            </span>
+          </div>
+          {% endif %}
+        {% endfor %}
+        {% if stats.total == 0 %}
+        <span class="text-neutral" style="font-size:.85rem;">暂无数据</span>
+        {% endif %}
+      </div>
+      <div class="stat-label">各框架概览</div>
+    </div>
+  </div>
+</div>
+
+<!-- Recent recommendations -->
+<div class="card">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-clock-history me-1"></i>最近推荐</span>
+    <a href="{{ url_for('add') }}" class="btn btn-success btn-sm">
+      <i class="bi bi-plus me-1"></i>记录新推荐
+    </a>
+  </div>
+  {% if recent %}
+  <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>日期</th>
+          <th>股票</th>
+          <th>框架</th>
+          <th>类型</th>
+          <th>入场价</th>
+          <th>最新价</th>
+          <th>涨跌</th>
+          <th>状态</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in recent %}
+        <tr>
+          <td class="text-muted">{{ r.created_at }}</td>
+          <td>
+            <a href="{{ url_for('detail', rec_id=r.id) }}" class="fw-bold">{{ r.ticker }}</a>
+            <small class="text-muted ms-1">{{ r.market }}</small>
+          </td>
+          <td><span class="fw-badge fw-{{ r.framework }}">{{ r.framework_name }}</span></td>
+          <td>
+            {% if r.source_type == 'real' %}
+            <span class="badge-real">真实</span>
+            {% else %}
+            <span class="badge-paper">纸面</span>
+            {% endif %}
+          </td>
+          <td>${{ "%.2f"|format(r.entry_price) }}</td>
+          <td>
+            {% if r.latest_price %}${{ "%.2f"|format(r.latest_price) }}{% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            {% if r.pct_change is not none %}
+              <span class="{{ 'pct-pos' if r.pct_change > 0 else ('pct-neg' if r.pct_change < 0 else 'pct-zero') }}">
+                {{ "%+.1f"|format(r.pct_change) }}%
+              </span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            <span class="badge-status status-{{ r.status }}">
+              {{ {'active':'活跃','stopped':'止损','target1':'止盈1','target2':'止盈2','closed':'已关闭','expired':'已过期'}.get(r.status, r.status) }}
+            </span>
+          </td>
+          <td>
+            <a href="{{ url_for('detail', rec_id=r.id) }}" class="btn btn-outline-secondary btn-sm">
+              <i class="bi bi-arrow-right"></i>
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <i class="bi bi-inbox d-block"></i>
+    <div class="fw-bold mb-1">还没有推荐记录</div>
+    <div class="mb-3" style="font-size:.875rem;">每次 AI 给你推荐，或者你问我"能不能买"，就记进来</div>
+    <a href="{{ url_for('add') }}" class="btn btn-success">
+      <i class="bi bi-plus-circle me-1"></i>记录第一条推荐
+    </a>
+  </div>
+  {% endif %}
+</div>
+
+{% if recent %}
+<div class="mt-2 text-end">
+  <a href="{{ url_for('recommendations') }}" class="text-muted" style="font-size:.85rem;">
+    查看全部 <i class="bi bi-arrow-right"></i>
+  </a>
+</div>
+{% endif %}
+{% endblock %}
