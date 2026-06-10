@@ -3,35 +3,66 @@ __pycache__/
 *.pyc
 *.pyo
 
-# 运行时数据 — 不提交到 git
-imini/monitors/
-imini/events/
-imini/feishu_state.json
-imini/known_ids.json
-imini/orchestrator.log
-imini/bot_server.log
-imini/*.log
+# ══ 独立 git 仓库（有自己的 GitHub remote，不在本仓库跟踪）══
+/signing-monitor/k4/
+/signing-monitor/kms/
+/股票追踪/cc-equity-research/
 
-k4/campaigns/
-k4/events/
-k4/feishu_state.json
-k4/known_campaigns.json
-k4/orchestrator.log
-k4/bot_server.log
-k4/*.log
+# ══ signing-monitor（imini + k4 + kms 签售监控）运行时数据 ══
+signing-monitor/.temp/
+signing-monitor/imini/monitors/
+signing-monitor/imini/events/
+signing-monitor/imini/feishu_state.json
+signing-monitor/imini/known_ids.json
+signing-monitor/imini/*.log
+signing-monitor/k4/campaigns/
+signing-monitor/k4/events/
+signing-monitor/k4/feishu_state.json
+signing-monitor/k4/known_campaigns.json
+signing-monitor/k4/*.log
+signing-monitor/kms/campaigns/
+signing-monitor/kms/data/
+signing-monitor/kms/*.log
 
-# 环境变量文件
+# ══ 股票追踪（tracker 投资复盘系统）══
+# 数据库（个人投资数据不入库）
+股票追踪/tracker/data/*.db
+# 长桥 token 等临时敏感文件
+股票追踪/.temp/
+
+# 工作截图等会话产物
+signing-monitor/*.png
+signing-monitor/snapshot-preview-modal.txt
+股票追踪/*.png
+
+# 环境变量文件（含密码等敏感信息）
 .env
 *.env
+!.env.example
 
 # 编辑器
 .DS_Store
 .vscode/
 .idea/
 
-# Claude worktree
+# Claude / WorkBuddy worktree
 **/.claude/
+**/.workbuddy/
 *.docx
 
-# Tracker 数据库不入库
-tracker/data/*.db
+# ══ 与项目无关的本地文件夹（gaoji 目录下的其他个人文件，不入库）══
+/10BTI/
+/app/
+/jianziji/
+/kms旧/
+/pets/
+/python爬取/
+/qsjkxl/
+/sales-tracking-master原/
+/【ai cover】/
+/【微信聊天记录】program/
+/大麦+猫眼抢票神器（含源码）/
+/头像/
+/演唱会改名/
+/追星选择器/
+/预录程序/

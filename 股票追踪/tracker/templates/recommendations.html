@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}所有推荐{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h5 class="fw-bold mb-0">所有推荐记录</h5>
+  <a href="{{ url_for('add') }}" class="btn btn-success btn-sm">
+    <i class="bi bi-plus me-1"></i>记录推荐
+  </a>
+</div>
+
+<div class="filter-bar mb-3">
+  <form method="get" class="d-flex flex-wrap gap-2 align-items-center">
+    <select name="entry_rec" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
+      <option value="">全部建议</option>
+      {% for k, v in entry_rec_map.items() %}
+      <option value="{{ k }}" {{ 'selected' if selected_entry == k }}>{{ v[1] }}</option>
+      {% endfor %}
+    </select>
+    <select name="framework" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
+      <option value="">全部框架</option>
+      {% for k, v in frameworks.items() %}
+      <option value="{{ k }}" {{ 'selected' if selected_fw == k }}>{{ v }}</option>
+      {% endfor %}
+    </select>
+    <select name="status" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
+      <option value="">全部状态</option>
+      <option value="active"  {{ 'selected' if selected_status == 'active' }}>追踪中</option>
+      <option value="stopped" {{ 'selected' if selected_status == 'stopped' }}>已止损</option>
+      <option value="target1" {{ 'selected' if selected_status == 'target1' }}>止盈1</option>
+      <option value="closed"  {{ 'selected' if selected_status == 'closed' }}>已关闭</option>
+    </select>
+    <select name="bought" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
+      <option value="">已买+未买</option>
+      <option value="1" {{ 'selected' if selected_bought == '1' }}>已买</option>
+      <option value="0" {{ 'selected' if selected_bought == '0' }}>未买</option>
+    </select>
+    {% if selected_fw or selected_status or selected_entry or selected_bought %}
+    <a href="{{ url_for('recommendations') }}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-x me-1"></i>清除
+    </a>
+    {% endif %}
+    <span class="text-muted ms-auto" style="font-size:.8rem;">共 {{ rows|length }} 条</span>
+  </form>
+</div>
+
+{% if rows %}
+<div class="card">
+  <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead>
+        <tr>
+          <th>日期</th>
+          <th>股票</th>
+          <th>入场建议</th>
+          <th>风险</th>
+          <th>周期</th>
+          <th>推荐时价</th>
+          <th>当前价</th>
+          <th>涨跌</th>
+          <th>是否已买</th>
+          <th>状态</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr style="cursor:pointer;" onclick="location.href='{{ url_for('detail', rec_id=r.id) }}'">
+          <td class="text-muted" style="font-size:.8rem; white-space:nowrap;">{{ r.created_at }}</td>
+          <td>
+            <a href="{{ url_for('detail', rec_id=r.id) }}" class="fw-bold" onclick="event.stopPropagation()">{{ r.ticker }}</a>
+            <small class="text-muted">{{ r.market }}</small>
+            {% if r.monitoring %}<span class="monitor-badge ms-1">🔔</span>{% endif %}
+          </td>
+          <td>
+            {% set el = r.entry_rec_label %}
+            <span class="entry-badge {{ el[1] }}">{{ el[0] }}</span>
+          </td>
+          <td><span class="verdict-tag {{ r.risk_info[1] }}" style="font-size:.75rem; padding:.15em .5em;">{{ r.risk_info[0] }}</span></td>
+          <td><span style="font-size:.78rem; color:var(--text-muted);">{{ r.hold_label }}</span></td>
+          <td style="font-size:.875rem; font-weight:500;">${{ "%.2f"|format(r.entry_price) }}</td>
+          <td style="font-size:.875rem;">
+            {% if r.latest_price %}${{ "%.2f"|format(r.latest_price) }}
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            {% if r.pct_change is not none %}
+            <span class="{{ 'pct-pos' if r.pct_change > 0 else ('pct-neg' if r.pct_change < 0 else 'pct-zero') }}">
+              {{ "%+.1f"|format(r.pct_change) }}%
+            </span>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            {% if r.is_bought %}
+            <span class="badge-real">已买</span>
+            {% else %}
+            <span class="text-muted" style="font-size:.8rem;">未买</span>
+            {% endif %}
+          </td>
+          <td><span class="badge-status status-{{ r.status }}">{{ r.status_label }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="empty-state">
+  <i class="bi bi-search d-block"></i>
+  <div class="fw-bold mb-1">没有符合条件的记录</div>
+  <a href="{{ url_for('recommendations') }}" class="btn btn-outline-secondary btn-sm mt-2">清除筛选</a>
+</div>
+{% endif %}
+{% endblock %}

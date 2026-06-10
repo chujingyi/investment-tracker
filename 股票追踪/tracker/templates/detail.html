@@ -1,0 +1,382 @@
+{% extends "base.html" %}
+{% block title %}{{ row.ticker }} 详情{% endblock %}
+
+{% block content %}
+<div class="mb-3 d-flex gap-3 align-items-center">
+  {% if row.session_id %}
+  <a href="{{ url_for('session_detail', session_id=row.session_id) }}" class="text-muted" style="font-size:.85rem;">
+    <i class="bi bi-arrow-left me-1"></i>返回会话
+  </a>
+  {% else %}
+  <a href="{{ url_for('recommendations') }}" class="text-muted" style="font-size:.85rem;">
+    <i class="bi bi-arrow-left me-1"></i>返回列表
+  </a>
+  {% endif %}
+  {% if row.session_question %}
+  <span class="text-muted" style="font-size:.78rem;">
+    <i class="bi bi-collection me-1"></i>{{ row.session_question }}
+  </span>
+  {% endif %}
+</div>
+
+<!-- Verdict card (top, most prominent) -->
+<div class="verdict-card verdict-{{ row.entry_rec }} mb-3">
+  <div class="row align-items-start">
+    <div class="col-md-6">
+      <div class="d-flex align-items-center gap-2 mb-1">
+        <span style="font-size:1.6rem; font-weight:800;">{{ row.ticker }}</span>
+        <small class="text-muted">{{ row.market }}</small>
+        {% if row.is_bought %}<span class="badge-real">已买</span>{% endif %}
+        {% if row.monitoring %}<span class="monitor-badge">🔔 监控中</span>{% endif %}
+      </div>
+      <div class="verdict-main">
+        {{ row.entry_rec_label[0] }}
+      </div>
+      <div>
+        <span class="verdict-tag {{ row.risk_info[1] }}">{{ row.risk_info[0] }}</span>
+        <span class="verdict-tag tag-hold">{{ row.hold_label }}</span>
+        <span class="verdict-tag tag-strategy">{{ row.strategy_label }}</span>
+      </div>
+      {% if row.catalyst %}
+      <div class="mt-2" style="font-size:.85rem; color:var(--text-muted);">
+        <i class="bi bi-lightning-fill me-1" style="color:#9a6700;"></i>{{ row.catalyst }}
+      </div>
+      {% endif %}
+      {% if row.entry_rec == 'wait' and row.wait_price %}
+      <div class="mt-1" style="font-size:.85rem; color:#9a6700; font-weight:600;">
+        ⏳ 等回落到 ${{ "%.2f"|format(row.wait_price) }}
+        {% if row.wait_condition %} — {{ row.wait_condition }}{% endif %}
+      </div>
+      {% endif %}
+    </div>
+    <div class="col-md-6 text-md-end mt-2 mt-md-0">
+      {% if row.latest_price %}
+      <div style="font-size:2rem; font-weight:700; line-height:1;">
+        ${{ "%.2f"|format(row.latest_price) }}
+        {% if row.pct_change is not none %}
+        <span style="font-size:1.2rem;"
+              class="{{ 'pct-pos' if row.pct_change > 0 else ('pct-neg' if row.pct_change < 0 else 'pct-zero') }}">
+          {{ "%+.1f"|format(row.pct_change) }}%
+        </span>
+        {% endif %}
+      </div>
+      <div style="font-size:.78rem; color:var(--text-muted);">最后更新 {{ row.latest_date }}</div>
+      {% else %}
+      <div style="color:var(--text-muted);">未录入价格</div>
+      {% endif %}
+      <div class="mt-1">
+        <span class="badge-status status-{{ row.status }}">{{ row.status_label }}</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <!-- Left -->
+  <div class="col-lg-7">
+    <!-- Chart -->
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-bar-chart me-1"></i>价格走势</div>
+      <div class="card-body p-3">
+        {% if snapshots %}
+        <div class="chart-wrap"><canvas id="priceChart"></canvas></div>
+        {% else %}
+        <div class="text-muted text-center py-4" style="font-size:.85rem;">
+          <i class="bi bi-graph-up d-block mb-2" style="font-size:1.5rem;opacity:.3;"></i>
+          更新价格后显示走势图
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Update price -->
+    {% if row.status in ('active', 'target1') %}
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-arrow-repeat me-1"></i>更新价格</div>
+      <div class="card-body p-3">
+        <form method="post" action="{{ url_for('update_price', rec_id=row.id) }}"
+              class="row g-2 align-items-end">
+          <div class="col-sm-5">
+            <label class="form-label">当前价格</label>
+            <div class="input-group">
+              <span class="input-group-text">$</span>
+              <input type="number" name="price" class="form-control" step="0.0001" required placeholder="0.00">
+            </div>
+          </div>
+          <div class="col-sm-4">
+            <label class="form-label">日期</label>
+            <input type="date" name="snap_date" class="form-control" value="{{ today }}">
+          </div>
+          <div class="col-sm-3">
+            <button type="submit" class="btn btn-primary w-100">更新</button>
+          </div>
+        </form>
+        <div class="mt-2 d-flex gap-3 flex-wrap" style="font-size:.78rem; color:var(--text-muted);">
+          {% if row.stop_loss_price %}
+          <span>止损 <span class="text-loss fw-bold">${{ "%.2f"|format(row.stop_loss_price) }}</span></span>
+          {% endif %}
+          {% if row.wait_price %}
+          <span>等待价 <span style="color:#9a6700; font-weight:600;">${{ "%.2f"|format(row.wait_price) }}</span></span>
+          {% endif %}
+          {% if row.target1_price %}
+          <span>目标1 <span class="text-win fw-bold">${{ "%.2f"|format(row.target1_price) }}</span></span>
+          {% endif %}
+          {% if row.target2_price %}
+          <span>目标2 <span class="text-win fw-bold">${{ "%.2f"|format(row.target2_price) }}</span></span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Bought toggle -->
+    <div class="card mb-3">
+      <div class="card-body p-3 d-flex justify-content-between align-items-center">
+        <div>
+          <div class="fw-semibold" style="font-size:.875rem;">
+            {% if row.is_bought %}💰 已买入{% else %}已买入了吗？{% endif %}
+          </div>
+          <div class="text-muted" style="font-size:.8rem;">
+            {% if row.is_bought %}点击可改回"未买"{% else %}如果你实际买了这只，点这里标记{% endif %}
+          </div>
+        </div>
+        <form method="post" action="{{ url_for('toggle_bought', rec_id=row.id) }}">
+          <button type="submit" class="btn btn-sm {% if row.is_bought %}btn-warning{% else %}btn-outline-secondary{% endif %}">
+            {% if row.is_bought %}已买 ✓{% else %}标记为已买{% endif %}
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <!-- Monitor toggle -->
+    {% if row.entry_rec == 'wait' and row.wait_price and row.status == 'active' %}
+    <div class="card mb-3 {% if row.monitoring %}border-warning{% endif %}"
+         style="{% if row.monitoring %}border-color:#f0c419 !important;{% endif %}">
+      <div class="card-body p-3 d-flex justify-content-between align-items-center">
+        <div>
+          {% if row.monitoring %}
+          <div class="fw-semibold">🔔 正在监控价格回落</div>
+          <div class="text-muted" style="font-size:.82rem;">
+            等待跌到 ${{ "%.2f"|format(row.wait_price) }}，到价时会在仪表盘提示
+          </div>
+          {% else %}
+          <div class="fw-semibold">开启价格监控</div>
+          <div class="text-muted" style="font-size:.82rem;">
+            等回落到 ${{ "%.2f"|format(row.wait_price) }} 时在仪表盘提醒你
+          </div>
+          {% endif %}
+        </div>
+        <form method="post" action="{{ url_for('toggle_monitor', rec_id=row.id) }}">
+          <button type="submit" class="btn btn-sm {% if row.monitoring %}btn-warning{% else %}btn-outline-secondary{% endif %}">
+            {% if row.monitoring %}🔔 关闭监控{% else %}开启监控{% endif %}
+          </button>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Price history -->
+    {% if snapshots %}
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-table me-1"></i>价格记录</div>
+      <div class="table-responsive">
+        <table class="table table-sm mb-0">
+          <thead><tr><th>日期</th><th>价格</th><th>相对入场</th></tr></thead>
+          <tbody>
+            {% for s in snapshots|reverse %}
+            <tr>
+              <td class="text-muted">{{ s.snapshot_date }}</td>
+              <td>${{ "%.2f"|format(s.price) }}</td>
+              <td>
+                {% if s.pct_change is not none %}
+                <span class="{{ 'pct-pos' if s.pct_change > 0 else ('pct-neg' if s.pct_change < 0 else 'pct-zero') }}">
+                  {{ "%+.1f"|format(s.pct_change) }}%
+                </span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Close position -->
+    {% if row.status in ('active', 'target1', 'target2') %}
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-x-circle me-1"></i>关闭此推荐</div>
+      <div class="card-body p-3">
+        <form method="post" action="{{ url_for('close_rec', rec_id=row.id) }}" class="row g-2 align-items-end">
+          <div class="col-sm-4">
+            <label class="form-label">出场价格</label>
+            <div class="input-group">
+              <span class="input-group-text">$</span>
+              <input type="number" name="close_price" class="form-control" step="0.0001" required placeholder="0.00">
+            </div>
+          </div>
+          <div class="col-sm-3">
+            <label class="form-label">日期</label>
+            <input type="date" name="close_date" class="form-control" value="{{ today }}">
+          </div>
+          <div class="col-sm-3">
+            <label class="form-label">结果</label>
+            <select name="status" class="form-select">
+              <option value="closed">手动关闭</option>
+              <option value="stopped">触发止损</option>
+              <option value="target1">到达止盈1</option>
+              <option value="target2">到达止盈2</option>
+              <option value="expired">到期结束</option>
+            </select>
+          </div>
+          <div class="col-sm-2">
+            <button type="submit" class="btn btn-outline-secondary w-100">关闭</button>
+          </div>
+          <div class="col-12">
+            <input type="text" name="close_reason" class="form-control form-control-sm" placeholder="备注原因（选填）">
+          </div>
+        </form>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Closed result -->
+    {% if row.status not in ('active', 'target1', 'target2') and row.close_price %}
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-flag-fill me-1"></i>已关闭详情</div>
+      <div class="card-body p-3 row g-2" style="font-size:.875rem;">
+        <div class="col-6"><div class="text-muted">出场价格</div><div class="fw-bold">${{ "%.2f"|format(row.close_price) }}</div></div>
+        <div class="col-6"><div class="text-muted">出场日期</div><div class="fw-bold">{{ row.close_date or '—' }}</div></div>
+        {% if row.close_reason %}<div class="col-12"><div class="text-muted">原因</div><div>{{ row.close_reason }}</div></div>{% endif %}
+        {% if row.pct_change is not none %}
+        <div class="col-12 mt-1">
+          <span style="font-size:1.3rem; font-weight:700;"
+                class="{{ 'pct-pos' if row.pct_change > 0 else 'pct-neg' }}">
+            最终收益：{{ "%+.1f"|format(row.pct_change) }}%
+          </span>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Right: details -->
+  <div class="col-lg-5">
+    <!-- Core details -->
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-info-circle me-1"></i>推荐详情</div>
+      <div class="card-body p-3" style="font-size:.875rem;">
+        <div class="row g-2">
+          <div class="col-6"><div class="text-muted">推荐日期</div><div>{{ row.created_at }}</div></div>
+          <div class="col-6">
+            <div class="text-muted">信心度</div>
+            <div>
+              {% for i in range(5) %}
+              <i class="bi bi-star-fill {{ 'conviction-star' if i < row.conviction else 'conviction-empty' }}"></i>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="col-6 mt-1"><div class="text-muted">参考入场价</div><div class="fw-bold">${{ "%.2f"|format(row.entry_price) }}</div></div>
+          <div class="col-6 mt-1"><div class="text-muted">止损 (-8%)</div><div class="text-loss fw-bold">{% if row.stop_loss_price %}${{ "%.2f"|format(row.stop_loss_price) }}{% else %}—{% endif %}</div></div>
+          <div class="col-6"><div class="text-muted">目标1 (+15%)</div><div class="text-win fw-bold">{% if row.target1_price %}${{ "%.2f"|format(row.target1_price) }}{% else %}—{% endif %}</div></div>
+          <div class="col-6"><div class="text-muted">目标2 (+30%)</div><div class="text-win fw-bold">{% if row.target2_price %}${{ "%.2f"|format(row.target2_price) }}{% else %}—{% endif %}</div></div>
+          {% if row.validity_date %}
+          <div class="col-12 mt-1"><div class="text-muted">机会有效期</div><div>{{ row.validity_date }}</div></div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Signals -->
+    {% if row.signals %}
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-check2-all me-1"></i>入场信号 ({{ row.signals|length }}/5)</div>
+      <div class="card-body p-3">
+        {% for sig in row.signals %}
+        <span class="signal-pill">✓ {{ sig }}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Notes -->
+    {% if row.notes %}
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-chat-quote me-1"></i>AI 分析备注</div>
+      <div class="card-body p-3" style="font-size:.85rem; white-space:pre-wrap;">{{ row.notes }}</div>
+    </div>
+    {% endif %}
+
+    <!-- Delete -->
+    <div class="card" style="border-color: #ffcecb;">
+      <div class="card-body p-3">
+        <form method="post" action="{{ url_for('delete_rec', rec_id=row.id) }}"
+              onsubmit="return confirm('确认删除？此操作不可撤销。')">
+          <button type="submit" class="btn btn-outline-danger btn-sm">
+            <i class="bi bi-trash me-1"></i>删除此记录
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if snapshots %}
+<script>
+fetch('/api/chart/{{ row.id }}').then(r => r.json()).then(data => {
+  const ctx = document.getElementById('priceChart').getContext('2d');
+  const entry = data.entry;
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: data.labels,
+      datasets: [{
+        label: '价格',
+        data: data.prices,
+        borderColor: '#0969da',
+        backgroundColor: 'rgba(9,105,218,.06)',
+        borderWidth: 2,
+        pointRadius: 4,
+        fill: true,
+        tension: 0.3,
+        pointBackgroundColor: data.prices.map((p, i) => {
+          if (i === 0) return '#656d76';
+          {% if row.stop_loss_price %}if (p <= {{ row.stop_loss_price }}) return '#cf222e';{% endif %}
+          {% if row.target1_price %}if (p >= {{ row.target1_price }}) return '#1a7f37';{% endif %}
+          return '#0969da';
+        }),
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const pct = ((ctx.raw - entry) / entry * 100).toFixed(1);
+              return ` $${ctx.raw.toFixed(2)}  (${pct > 0 ? '+' : ''}${pct}%)`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { ticks: { color: '#656d76', font: {size:11} }, grid: { color: '#f0f2f5' } },
+        y: {
+          ticks: { color: '#656d76', font: {size:11}, callback: v => '$' + v.toFixed(2) },
+          grid: { color: '#f0f2f5' },
+          {% if row.stop_loss_price and row.target1_price %}
+          suggestedMin: {{ row.stop_loss_price * 0.97 }},
+          suggestedMax: {{ row.target1_price * 1.03 }},
+          {% endif %}
+        }
+      }
+    }
+  });
+});
+</script>
+{% endif %}
+{% endblock %}

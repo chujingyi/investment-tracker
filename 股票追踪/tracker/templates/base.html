@@ -10,32 +10,38 @@
 </head>
 <body>
 
-<nav class="navbar navbar-dark navbar-expand-lg">
+<nav class="navbar navbar-expand-lg">
   <div class="container-fluid px-4">
     <a class="navbar-brand fw-bold" href="{{ url_for('dashboard') }}">
-      <i class="bi bi-graph-up-arrow me-2"></i>投资复盘系统
+      <i class="bi bi-graph-up-arrow me-2 text-success"></i>投资复盘系统
     </a>
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav">
       <span class="navbar-toggler-icon"></span>
     </button>
     <div class="collapse navbar-collapse" id="nav">
-      <ul class="navbar-nav ms-auto">
+      <ul class="navbar-nav ms-auto align-items-lg-center gap-1">
         <li class="nav-item">
-          <a class="nav-link {% if request.endpoint == 'dashboard' %}active{% endif %}"
+          <a class="nav-link {% if request.endpoint == 'dashboard' %}active fw-semibold{% endif %}"
              href="{{ url_for('dashboard') }}">
             <i class="bi bi-house me-1"></i>仪表盘
           </a>
         </li>
         <li class="nav-item">
-          <a class="nav-link {% if request.endpoint == 'recommendations' %}active{% endif %}"
+          <a class="nav-link {% if request.endpoint in ('sessions','session_detail','add_session') %}active fw-semibold{% endif %}"
+             href="{{ url_for('sessions') }}">
+            <i class="bi bi-collection me-1"></i>分析会话
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link {% if request.endpoint == 'recommendations' %}active fw-semibold{% endif %}"
              href="{{ url_for('recommendations') }}">
             <i class="bi bi-list-ul me-1"></i>所有推荐
           </a>
         </li>
-        <li class="nav-item">
-          <a class="nav-link btn btn-accent ms-2 px-3 {% if request.endpoint == 'add' %}active{% endif %}"
-             href="{{ url_for('add') }}">
-            <i class="bi bi-plus-circle me-1"></i>记录推荐
+        <li class="nav-item ms-1">
+          <a class="btn btn-success btn-sm px-3 {% if request.endpoint == 'add_session' %}active{% endif %}"
+             href="{{ url_for('add_session') }}">
+            <i class="bi bi-plus-circle me-1"></i>新建会话
           </a>
         </li>
       </ul>
@@ -43,10 +49,11 @@
   </div>
 </nav>
 
-<div class="container-fluid px-4 py-4">
+<div class="container-fluid px-4 py-4" style="max-width:1400px;">
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% for category, msg in messages %}
-    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+    <div class="alert alert-{{ category }} alert-dismissible fade show py-2" role="alert"
+         style="font-size:.875rem;">
       {{ msg }}
       <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     </div>

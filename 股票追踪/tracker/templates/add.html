@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+{% block title %}记录推荐{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+  <h5 class="fw-bold mb-0">记录股票推荐</h5>
+  <div class="text-muted" style="font-size:.85rem;">添加到分析会话，或单独记录一只</div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-7">
+    <form method="post">
+      <!-- Basic info -->
+      <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-pencil me-1"></i>基本信息</div>
+        <div class="card-body p-3 row g-3">
+          <div class="col-sm-4">
+            <label class="form-label">股票代码 *</label>
+            <input type="text" name="ticker" class="form-control" required
+                   placeholder="HOOD / 0700.HK" style="text-transform:uppercase;">
+          </div>
+          <div class="col-sm-3">
+            <label class="form-label">市场</label>
+            <select name="market" class="form-select">
+              <option value="US" selected>美股 US</option>
+              <option value="HK">港股 HK</option>
+              <option value="CN">A股 CN</option>
+            </select>
+          </div>
+          <div class="col-sm-5">
+            <label class="form-label">归属会话（可选）</label>
+            <select name="session_id" class="form-select">
+              <option value="">— 不归属会话 —</option>
+              {% for s in all_sessions %}
+              <option value="{{ s.id }}" {{ 'selected' if default_session == s.id|string }}>
+                {{ s.created_at }} · {{ s.question[:30] }}{% if s.question|length > 30 %}…{% endif %}
+              </option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-sm-4">
+            <label class="form-label">推荐日期</label>
+            <input type="date" name="created_at" class="form-control" value="{{ today }}">
+          </div>
+          <div class="col-sm-4">
+            <label class="form-label">分析框架</label>
+            <select name="framework" class="form-select" id="frameworkSelect">
+              {% for k, v in frameworks.items() %}
+              <option value="{{ k }}">{{ v }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <input type="hidden" name="source_type" value="paper">
+        </div>
+      </div>
+
+      <!-- Verdict card -->
+      <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-card-checklist me-1"></i>结构化结论</div>
+        <div class="card-body p-3 row g-3">
+          <div class="col-sm-6">
+            <label class="form-label">入场建议 *</label>
+            <div class="d-flex flex-column gap-2">
+              {% for k, v in entry_rec.items() %}
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="entry_rec" value="{{ k }}"
+                       id="er_{{ k }}" {{ 'checked' if k == 'watch' }}>
+                <label class="form-check-label" for="er_{{ k }}">
+                  <span class="entry-badge {{ v[2] }}">{{ v[1] }}</span>
+                </label>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="col-sm-6">
+            <div class="mb-3">
+              <label class="form-label">风险等级</label>
+              <div class="d-flex flex-column gap-1">
+                {% for k, v in risk_level.items() %}
+                <div class="form-check">
+                  <input class="form-check-input" type="radio" name="risk_level" value="{{ k }}"
+                         id="rl_{{ k }}" {{ 'checked' if k == 'medium' }}>
+                  <label class="form-check-label" for="rl_{{ k }}">
+                    <span class="verdict-tag {{ v[1] }}" style="font-size:.78rem;">{{ v[0] }}</span>
+                  </label>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+            <div>
+              <label class="form-label">持仓周期</label>
+              <select name="hold_period" class="form-select form-select-sm">
+                {% for k, v in hold_period.items() %}
+                <option value="{{ k }}">{{ v }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <div class="col-sm-6">
+            <label class="form-label">策略类型</label>
+            <select name="strategy_type" class="form-select">
+              {% for k, v in strategy_type.items() %}
+              <option value="{{ k }}">{{ v }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-sm-6">
+            <label class="form-label">机会有效期</label>
+            <input type="date" name="validity_date" class="form-control">
+            <div class="form-text">过了这个日期机会可能消失</div>
+          </div>
+          <div class="col-12">
+            <label class="form-label">核心催化剂</label>
+            <input type="text" name="catalyst" class="form-control"
+                   placeholder="一句话概括：例 与NVIDIA合作AI网络实验室，首次商业落地">
+          </div>
+          <div class="col-sm-5" id="waitPriceRow">
+            <label class="form-label">等待价格（等回落到）</label>
+            <div class="input-group">
+              <span class="input-group-text">$</span>
+              <input type="number" name="wait_price" class="form-control" step="0.01" placeholder="0.00">
+            </div>
+          </div>
+          <div class="col-sm-7" id="waitConditionRow">
+            <label class="form-label">等待条件说明</label>
+            <input type="text" name="wait_condition" class="form-control"
+                   placeholder="例：等回落到20日均线 / 等财报后反应">
+          </div>
+        </div>
+      </div>
+
+      <!-- Price fields -->
+      <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-currency-dollar me-1"></i>价格参数</div>
+        <div class="card-body p-3 row g-3">
+          <div class="col-sm-4">
+            <label class="form-label">参考价格 *</label>
+            <div class="input-group">
+              <span class="input-group-text">$</span>
+              <input type="number" name="entry_price" id="entryPrice" class="form-control"
+                     required step="0.0001" placeholder="0.00" oninput="updateTargets()">
+            </div>
+          </div>
+          <div class="col-sm-4">
+            <label class="form-label">止损价 <small class="text-muted">(-8%)</small></label>
+            <div class="input-group">
+              <span class="input-group-text">$</span>
+              <input type="number" name="stop_loss_price" id="stopPrice" class="form-control"
+                     step="0.0001" placeholder="自动" readonly>
+            </div>
+          </div>
+          <div class="col-sm-4">
+            <label class="form-label">目标1 <small class="text-muted">(+15%)</small></label>
+            <div class="input-group">
+              <span class="input-group-text">$</span>
+              <input type="number" name="target1_price" id="target1Price" class="form-control"
+                     step="0.0001" placeholder="自动" readonly>
+            </div>
+          </div>
+          <div class="col-12">
+            <label class="form-label">信心度</label>
+            <div class="d-flex gap-3 flex-wrap">
+              {% for i in range(1, 6) %}
+              <div class="form-check form-check-inline">
+                <input class="form-check-input" type="radio" name="conviction" value="{{ i }}"
+                       id="conv{{ i }}" {{ 'checked' if i == 3 }}>
+                <label class="form-check-label" for="conv{{ i }}">
+                  {% for j in range(i) %}<i class="bi bi-star-fill conviction-star"></i>{% endfor %}
+                  {% for j in range(5 - i) %}<i class="bi bi-star conviction-empty"></i>{% endfor %}
+                </label>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Signals -->
+      <div class="card mb-3" id="momentumSignals">
+        <div class="card-header"><i class="bi bi-check2-circle me-1"></i>动量框架入场信号</div>
+        <div class="card-body p-3">
+          {% for sig in momentum_signals %}
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="checkbox" name="signals" value="{{ sig }}" id="msig{{ loop.index }}">
+            <label class="form-check-label" for="msig{{ loop.index }}">{{ sig }}</label>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="card mb-3 d-none" id="fundamentalSignals">
+        <div class="card-header"><i class="bi bi-check2-circle me-1"></i>基本面框架信号</div>
+        <div class="card-body p-3">
+          {% for sig in fundamental_signals %}
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="checkbox" name="signals" value="{{ sig }}" id="fsig{{ loop.index }}">
+            <label class="form-check-label" for="fsig{{ loop.index }}">{{ sig }}</label>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- Notes -->
+      <div class="card mb-3">
+        <div class="card-header"><i class="bi bi-chat-left-text me-1"></i>AI 分析备注</div>
+        <div class="card-body p-3">
+          <textarea name="notes" class="form-control" rows="3"
+                    placeholder="补充要点、关键数据、特殊观察..."></textarea>
+        </div>
+      </div>
+
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-success">
+          <i class="bi bi-check-circle me-1"></i>保存推荐
+        </button>
+        <a href="javascript:history.back()" class="btn btn-outline-secondary">取消</a>
+      </div>
+    </form>
+  </div>
+
+  <!-- Help panel -->
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-lightbulb me-1"></i>动量框架速查</div>
+      <div class="card-body p-3" style="font-size:.82rem; color:var(--text-muted); line-height:1.9;">
+        <div class="mb-2"><strong style="color:var(--text);">止盈节奏</strong></div>
+        <div>📈 涨 15% → 卖出 1/3</div>
+        <div class="mb-2">📈 涨 30% → 再卖 1/3</div>
+        <div class="mb-2"><strong style="color:var(--text);">止损铁律</strong></div>
+        <div class="mb-2">📉 亏损 8% → 无条件止损</div>
+        <div class="mb-2"><strong style="color:var(--text);">仓位管理</strong></div>
+        <div>3项满足 → 试仓 $500–800</div>
+        <div>4项满足 → 标准仓 $1000–1500</div>
+        <div class="mb-2">5项全满 → 重仓 $2000+</div>
+        <div class="mb-2"><strong style="color:var(--text);">提前出场信号</strong></div>
+        <div>• 量价背离（高位放量不涨）</div>
+        <div>• 大单净流入转负</div>
+        <div>• 均线偏离 > 40%</div>
+        <div>• 媒体大量报道</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const fw = document.getElementById('frameworkSelect');
+const mSigs = document.getElementById('momentumSignals');
+const fSigs = document.getElementById('fundamentalSignals');
+
+function updateTargets() {
+  const entry = parseFloat(document.getElementById('entryPrice').value);
+  const isMomentum = fw.value === 'momentum';
+  if (!isNaN(entry) && entry > 0 && isMomentum) {
+    document.getElementById('stopPrice').value = (entry * 0.92).toFixed(4);
+    document.getElementById('target1Price').value = (entry * 1.15).toFixed(4);
+  } else {
+    document.getElementById('stopPrice').value = '';
+    document.getElementById('target1Price').value = '';
+  }
+}
+
+fw.addEventListener('change', function() {
+  mSigs.classList.toggle('d-none', this.value !== 'momentum');
+  fSigs.classList.toggle('d-none', this.value !== 'fundamental');
+  document.getElementById('stopPrice').readOnly = this.value === 'momentum';
+  document.getElementById('target1Price').readOnly = this.value === 'momentum';
+  updateTargets();
+});
+
+updateTargets();
+</script>
+{% endblock %}

@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% block title %}{{ session.question }}{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+  <a href="{{ url_for('sessions') }}" class="text-muted" style="font-size:.85rem;">
+    <i class="bi bi-arrow-left me-1"></i>返回会话列表
+  </a>
+</div>
+
+<!-- Session header -->
+<div class="card mb-4">
+  <div class="card-body p-3">
+    <div class="d-flex justify-content-between align-items-start">
+      <div>
+        <h5 class="fw-bold mb-1">{{ session.question }}</h5>
+        {% if session.theme %}
+        <span class="fw-badge fw-radar">📌 {{ session.theme }}</span>
+        {% endif %}
+        <span class="text-muted ms-2" style="font-size:.8rem;">{{ session.created_at }}</span>
+      </div>
+      <div class="d-flex gap-2">
+        <a href="{{ url_for('edit_session', session_id=session.id) }}"
+           class="btn btn-outline-secondary btn-sm">
+          <i class="bi bi-pencil me-1"></i>编辑
+        </a>
+        <a href="{{ url_for('add') }}?session_id={{ session.id }}"
+           class="btn btn-success btn-sm">
+          <i class="bi bi-plus me-1"></i>添加股票
+        </a>
+      </div>
+    </div>
+
+    {% if session.market_context %}
+    <div class="mt-3">
+      <button class="btn btn-sm btn-outline-secondary" type="button"
+              data-bs-toggle="collapse" data-bs-target="#contextCollapse">
+        <i class="bi bi-file-text me-1"></i>查看完整分析过程
+      </button>
+      <div class="collapse mt-2" id="contextCollapse">
+        <div class="context-body">{{ session.market_context }}</div>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% if recs %}
+<!-- Summary row -->
+<div class="row g-2 mb-3">
+  {% set immediate = recs | selectattr('entry_rec', 'equalto', 'immediate') | list %}
+  {% set wait = recs | selectattr('entry_rec', 'equalto', 'wait') | list %}
+  {% set watch = recs | selectattr('entry_rec', 'equalto', 'watch') | list %}
+  {% set avoid = recs | selectattr('entry_rec', 'equalto', 'avoid') | list %}
+  {% if immediate %}
+  <div class="col-auto">
+    <span class="entry-badge entry-immediate">{{ immediate|length }} 立即可入</span>
+  </div>
+  {% endif %}
+  {% if wait %}
+  <div class="col-auto">
+    <span class="entry-badge entry-wait">{{ wait|length }} 等回落</span>
+  </div>
+  {% endif %}
+  {% if watch %}
+  <div class="col-auto">
+    <span class="entry-badge entry-watch">{{ watch|length }} 仅观察</span>
+  </div>
+  {% endif %}
+  {% if avoid %}
+  <div class="col-auto">
+    <span class="entry-badge entry-avoid">{{ avoid|length }} 不碰</span>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Recs grouped by entry_rec -->
+{% for group_key, group_label in [('immediate','立即可入'), ('wait','等回落'), ('watch','仅观察'), ('avoid','不碰')] %}
+  {% set group_recs = recs | selectattr('entry_rec', 'equalto', group_key) | list %}
+  {% if group_recs %}
+  <div class="divider-label">{{ group_label }}</div>
+  <div class="row g-3 mb-2">
+    {% for r in group_recs %}
+    <div class="col-md-6 col-xl-4">
+      <div class="verdict-card verdict-{{ r.entry_rec }}">
+        <!-- Header -->
+        <div class="d-flex justify-content-between align-items-start mb-2">
+          <div>
+            <a href="{{ url_for('detail', rec_id=r.id) }}"
+               class="fw-bold text-decoration-none"
+               style="font-size:1.2rem; color:var(--text);">{{ r.ticker }}</a>
+            <small class="text-muted ms-1">{{ r.market }}</small>
+            {% if r.monitoring %}<span class="monitor-badge ms-1">🔔</span>{% endif %}
+            {% if r.is_bought %}<span class="badge-real ms-1">已买</span>{% endif %}
+          </div>
+          <div class="text-end">
+            <div class="text-muted" style="font-size:.75rem;">推荐时 ${{ "%.2f"|format(r.entry_price) }}</div>
+          </div>
+        </div>
+
+        <!-- Verdict main -->
+        <div class="verdict-main">{{ r.entry_rec_label[0] }}</div>
+
+        <!-- Tags row -->
+        <div class="mb-2">
+          <span class="verdict-tag {{ r.risk_info[1] }}">{{ r.risk_info[0] }}</span>
+          <span class="verdict-tag tag-hold">{{ r.hold_label }}</span>
+          <span class="verdict-tag tag-strategy">{{ r.strategy_label }}</span>
+        </div>
+
+        <!-- Catalyst -->
+        {% if r.catalyst %}
+        <div style="font-size:.8rem; color:var(--text-muted); margin-bottom:.4rem;">
+          <i class="bi bi-lightning-fill me-1" style="color:#9a6700;"></i>{{ r.catalyst }}
+        </div>
+        {% endif %}
+
+        <!-- Wait condition -->
+        {% if r.entry_rec == 'wait' and r.wait_price %}
+        <div style="font-size:.82rem; color:#9a6700; font-weight:600;">
+          ⏳ 等回落到 ${{ "%.2f"|format(r.wait_price) }}
+          {% if r.wait_condition %} — {{ r.wait_condition }}{% endif %}
+        </div>
+        {% endif %}
+
+        <!-- Price change if any -->
+        {% if r.pct_change is not none %}
+        <div class="mt-2" style="font-size:.82rem;">
+          当前涨跌：
+          <span class="{{ 'pct-pos' if r.pct_change > 0 else ('pct-neg' if r.pct_change < 0 else 'pct-zero') }}">
+            {{ "%+.1f"|format(r.pct_change) }}%
+          </span>
+          <span class="badge-status status-{{ r.status }} ms-1">{{ r.status_label }}</span>
+        </div>
+        {% endif %}
+
+        <!-- Footer -->
+        <div class="d-flex justify-content-between align-items-center mt-2 pt-2"
+             style="border-top:1px solid rgba(0,0,0,.06);">
+          <span class="fw-badge fw-{{ r.framework }}">{{ r.framework_name }}</span>
+          <a href="{{ url_for('detail', rec_id=r.id) }}"
+             class="text-muted" style="font-size:.78rem;">详情 →</a>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+{% endfor %}
+
+{% else %}
+<div class="empty-state">
+  <i class="bi bi-inbox d-block"></i>
+  <div class="fw-bold mb-1">还没有添加股票推荐</div>
+  <div class="mb-3" style="font-size:.875rem;">点击右上角"添加股票"，为这次分析会话加入个股结论</div>
+  <a href="{{ url_for('add') }}?session_id={{ session.id }}" class="btn btn-success">
+    <i class="bi bi-plus-circle me-1"></i>添加第一只股票
+  </a>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}分析会话{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h5 class="fw-bold mb-0">分析会话</h5>
+    <div class="text-muted" style="font-size:.85rem;">每次向 AI 提问后记录在这里，包含分析过程和所有推荐</div>
+  </div>
+  <a href="{{ url_for('add_session') }}" class="btn btn-success btn-sm">
+    <i class="bi bi-plus-circle me-1"></i>新建会话
+  </a>
+</div>
+
+{% if sessions %}
+<div class="row g-3">
+  {% for s in sessions %}
+  <div class="col-md-6 col-lg-4">
+    <a href="{{ url_for('session_detail', session_id=s.id) }}" class="session-card h-100 d-block">
+      <div class="d-flex justify-content-between align-items-start mb-1">
+        <div class="fw-semibold" style="font-size:.9rem; line-height:1.4;">{{ s.question }}</div>
+        <span class="text-muted ms-2" style="font-size:.75rem; white-space:nowrap;">{{ s.created_at }}</span>
+      </div>
+      {% if s.theme %}
+      <div class="session-theme mb-2">📌 {{ s.theme }}</div>
+      {% endif %}
+      <div class="d-flex gap-2 mt-2 flex-wrap">
+        {% if s.immediate_count %}
+        <span class="entry-badge entry-immediate">{{ s.immediate_count }} 可入</span>
+        {% endif %}
+        {% if s.wait_count %}
+        <span class="entry-badge entry-wait">{{ s.wait_count }} 等回落</span>
+        {% endif %}
+        {% if s.watch_count %}
+        <span class="entry-badge entry-watch">{{ s.watch_count }} 观察</span>
+        {% endif %}
+        {% if s.rec_count == 0 %}
+        <span class="text-muted" style="font-size:.8rem;">暂无推荐记录</span>
+        {% endif %}
+      </div>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+  <i class="bi bi-collection d-block"></i>
+  <div class="fw-bold mb-1">还没有分析会话</div>
+  <div class="mb-3" style="font-size:.875rem;">
+    每次你问我"XX最近有什么可以买"，就在这里建一个会话，记录分析过程和所有推荐
+  </div>
+  <a href="{{ url_for('add_session') }}" class="btn btn-success">
+    <i class="bi bi-plus-circle me-1"></i>新建第一个会话
+  </a>
+</div>
+{% endif %}
+{% endblock %}
