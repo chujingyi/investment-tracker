@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 import sqlite3
 import json
+import subprocess
 from datetime import date, datetime, timedelta
 import os
 
@@ -167,7 +168,12 @@ def calc_pct(entry, current):
 
 def enrich_row(row):
     r = dict(row)
-    r["signals"] = json.loads(r.get("signals") or "[]")
+    sig = r.get("signals") or "[]"
+    try:
+        r["signals"] = json.loads(sig)
+    except (json.JSONDecodeError, ValueError):
+        # Fallback: treat as semicolon-separated text
+        r["signals"] = [s.strip() for s in sig.split(";") if s.strip()]
     r["framework_name"] = FRAMEWORKS.get(r["framework"], r["framework"])
     r["entry_rec_info"] = ENTRY_REC.get(r.get("entry_rec") or "watch", ENTRY_REC["watch"])
     r["entry_rec_label"] = ENTRY_REC_LABEL.get(r.get("entry_rec") or "watch", ENTRY_REC_LABEL["watch"])
@@ -631,6 +637,94 @@ def chart_data(rec_id):
         "pct": [0.0] + [s["pct_change"] for s in snaps],
         "entry": row["entry_price"],
     })
+
+
+@app.route("/api/refresh_prices", methods=["POST"])
+def refresh_prices():
+    conn = get_db()
+    recs = conn.execute(
+        "SELECT id, ticker, market, entry_price, created_at FROM recommendations"
+    ).fetchall()
+
+    def lb_symbol(ticker, market):
+        t = ticker.strip().upper()
+        if '.' in t:
+            return t
+        m = (market or 'US').upper()
+        if m == 'HK':
+            return f"{t}.HK"
+        if m in ('CN', 'SH', 'SZ'):
+            return f"{t}.SH" if (t.startswith('6') or t.startswith('688')) else f"{t}.SZ"
+        return f"{t}.US"
+
+    today_date = date.today()
+    updated = 0
+    errors = []
+
+    for r in recs:
+        if not r["entry_price"] or not r["created_at"]:
+            continue
+        try:
+            start = date.fromisoformat(r["created_at"])
+        except ValueError:
+            continue
+
+        sym = lb_symbol(r["ticker"], r["market"])
+        rec_id = r["id"]
+        entry_price = r["entry_price"]
+
+        # Days from recommendation date to today, +10 buffer for weekends/holidays
+        count = (today_date - start).days + 10
+        count = max(count, 5)
+
+        try:
+            result = subprocess.run(
+                ["longbridge", "kline", sym, "--period=1d", f"--count={count}"],
+                capture_output=True, text=True, timeout=20
+            )
+        except Exception as e:
+            errors.append(sym)
+            continue
+
+        existing_dates = {row[0] for row in conn.execute(
+            "SELECT snapshot_date FROM price_snapshots WHERE recommendation_id=?", (rec_id,)
+        ).fetchall()}
+
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line.startswith('|'):
+                continue
+            parts = [p.strip() for p in line.split('|')]
+            # kline columns: | Time | Open | High | Low | Close | Volume | Turnover |
+            if len(parts) < 6 or not parts[1] or parts[1].startswith('-') or parts[1] == 'Time':
+                continue
+            try:
+                snap_date = parts[1].split()[0]
+                close_price = float(parts[5])
+            except (ValueError, IndexError):
+                continue
+
+            if snap_date < r["created_at"]:
+                continue
+
+            pct = round((close_price - entry_price) / entry_price * 100, 2)
+
+            if snap_date in existing_dates:
+                conn.execute(
+                    "UPDATE price_snapshots SET price=?, pct_change=? WHERE recommendation_id=? AND snapshot_date=?",
+                    (close_price, pct, rec_id, snap_date)
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO price_snapshots (recommendation_id, snapshot_date, price, pct_change) VALUES (?,?,?,?)",
+                    (rec_id, snap_date, close_price, pct)
+                )
+                existing_dates.add(snap_date)
+            updated += 1
+
+    conn.commit()
+    conn.close()
+    return jsonify({"updated": updated, "errors": errors})
 
 
 # API endpoints for Claude to write directly

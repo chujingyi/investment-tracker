@@ -38,7 +38,7 @@
         <i class="bi bi-file-text me-1"></i>查看完整分析过程
       </button>
       <div class="collapse mt-2" id="contextCollapse">
-        <div class="context-body">{{ session.market_context }}</div>
+        <div class="context-body" id="markdownContent">{{ session.market_context }}</div>
       </div>
     </div>
     {% endif %}
@@ -158,4 +158,15 @@
   </a>
 </div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+  const el = document.getElementById('markdownContent');
+  if (el && el.textContent.trim()) {
+    el.innerHTML = marked.parse(el.textContent);
+    el.classList.add('markdown-body');
+  }
+</script>
 {% endblock %}

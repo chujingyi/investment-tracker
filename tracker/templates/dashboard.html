@@ -7,9 +7,14 @@
     <h5 class="fw-bold mb-0">仪表盘</h5>
     <div class="text-muted" style="font-size:.85rem;">追踪 AI 推荐准确率，优化分析框架</div>
   </div>
-  <a href="{{ url_for('add_session') }}" class="btn btn-success btn-sm">
-    <i class="bi bi-plus-circle me-1"></i>新建分析会话
-  </a>
+  <div class="d-flex gap-2 align-items-center">
+    <button id="refreshBtn" class="btn btn-outline-secondary btn-sm" onclick="refreshPrices()">
+      <i class="bi bi-arrow-clockwise me-1"></i>刷新价格
+    </button>
+    <a href="{{ url_for('add_session') }}" class="btn btn-success btn-sm">
+      <i class="bi bi-plus-circle me-1"></i>新建分析会话
+    </a>
+  </div>
 </div>
 
 <!-- Monitoring alerts -->
@@ -192,4 +197,35 @@
     {% endif %}
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function refreshPrices() {
+  const btn = document.getElementById('refreshBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>更新中…';
+  fetch('/api/refresh_prices', { method: 'POST', signal: AbortSignal.timeout(120000) })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        btn.innerHTML = '<i class="bi bi-exclamation-triangle me-1"></i>失败';
+        btn.classList.replace('btn-outline-secondary', 'btn-outline-danger');
+        setTimeout(() => {
+          btn.disabled = false;
+          btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>刷新价格';
+          btn.classList.replace('btn-outline-danger', 'btn-outline-secondary');
+        }, 3000);
+      } else {
+        btn.innerHTML = '<i class="bi bi-check me-1"></i>已更新 ' + data.updated + ' 条';
+        btn.classList.replace('btn-outline-secondary', 'btn-outline-success');
+        setTimeout(() => location.reload(), 800);
+      }
+    })
+    .catch(() => {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>刷新价格';
+    });
+}
+</script>
 {% endblock %}
