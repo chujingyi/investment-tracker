@@ -52,14 +52,10 @@ ENTRY_REC_LABEL = {
 }
 
 STATUS_LABEL = {
-    "active":   "追踪中",
-    "stopped":  "已止损",
-    "target1":  "止盈1",
-    "target2":  "止盈2",
-    "closed":   "已关闭",
-    "expired":  "已过期",
-    "waiting":  "等待中",
-    "tracking": "追踪中",
+    "active":  "追踪中",
+    "stopped": "已停止",
+    "profit":  "已止盈",
+    "loss":    "已止损",
 }
 
 RISK_LEVEL = {
@@ -303,9 +299,9 @@ def compute_stats():
         - 仅观察/等回落：不计入（没有方向判断）
         """
         if r["entry_rec"] == "immediate" or r.get("is_bought"):
-            if r["status"] in ("target1", "target2"):
+            if r["status"] == "profit":
                 return "win"
-            if r["status"] == "stopped":
+            if r["status"] == "loss":
                 return "loss"
             return None
         if r["entry_rec"] == "avoid":
@@ -703,12 +699,12 @@ def update_price(rec_id):
     if row["status"] == "active" and is_position:
         if row["stop_loss_price"] and price <= row["stop_loss_price"]:
             conn.execute(
-                "UPDATE recommendations SET status='stopped', close_price=?, close_date=?, close_reason='止损触发' WHERE id=?",
+                "UPDATE recommendations SET status='loss', close_price=?, close_date=?, close_reason='止损触发' WHERE id=?",
                 (price, snap_date, rec_id))
             msg += " ⚠️ 止损触发"
         elif row["target1_price"] and price >= row["target1_price"]:
-            conn.execute("UPDATE recommendations SET status='target1' WHERE id=?", (rec_id,))
-            msg += " 🎯 到达止盈目标1"
+            conn.execute("UPDATE recommendations SET status='profit' WHERE id=?", (rec_id,))
+            msg += " 🎯 到达止盈目标"
     if row["monitoring"] and row["wait_price"] and price <= row["wait_price"]:
         flash(f"🔔 {row['ticker']} 已到达等待价 ${row['wait_price']:.2f}，可以考虑入场！", "warning")
     conn.commit()
@@ -746,7 +742,7 @@ def close_rec(rec_id):
     conn = get_db()
     conn.execute(
         "UPDATE recommendations SET status=?, close_price=?, close_date=?, close_reason=? WHERE id=?",
-        (request.form.get("status", "closed"),
+        (request.form.get("status", "stopped"),
          float(request.form.get("close_price", 0)),
          request.form.get("close_date") or str(date.today()),
          request.form.get("close_reason", "手动关闭"), rec_id),

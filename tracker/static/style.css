@@ -60,12 +60,10 @@ body {
 
 /* Status badges */
 .badge-status { font-size: .7rem; font-weight: 600; padding: .25em .6em; border-radius: 4px; }
-.status-active    { background: #ddf4ff; color: #0969da; border: 1px solid #b6e3ff; }
-.status-target1   { background: #dafbe1; color: #1a7f37; border: 1px solid #aceebb; }
-.status-target2   { background: #dafbe1; color: #1a7f37; border: 1px solid #aceebb; }
-.status-stopped   { background: #ffebe9; color: #cf222e; border: 1px solid #ffcecb; }
-.status-closed    { background: #f6f8fa; color: #656d76; border: 1px solid #d0d7de; }
-.status-expired   { background: #f6f8fa; color: #656d76; border: 1px solid #d0d7de; }
+.status-active  { background: #ddf4ff; color: #0969da; border: 1px solid #b6e3ff; }
+.status-profit  { background: #dafbe1; color: #1a7f37; border: 1px solid #aceebb; }
+.status-loss    { background: #ffebe9; color: #cf222e; border: 1px solid #ffcecb; }
+.status-stopped { background: #f6f8fa; color: #656d76; border: 1px solid #d0d7de; }
 
 .badge-paper { background: #fbefff; color: #6639ba; border: 1px solid #e2c6fe; font-size:.7rem; padding:.2em .5em; border-radius:4px; }
 .badge-real  { background: #fff8c5; color: #9a6700; border: 1px solid #f0c419; font-size:.7rem; padding:.2em .5em; border-radius:4px; }

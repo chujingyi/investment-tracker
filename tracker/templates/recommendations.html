@@ -26,9 +26,9 @@
     <select name="status" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
       <option value="">全部状态</option>
       <option value="active"  {{ 'selected' if selected_status == 'active' }}>追踪中</option>
-      <option value="stopped" {{ 'selected' if selected_status == 'stopped' }}>已止损</option>
-      <option value="target1" {{ 'selected' if selected_status == 'target1' }}>止盈1</option>
-      <option value="closed"  {{ 'selected' if selected_status == 'closed' }}>已关闭</option>
+      <option value="stopped" {{ 'selected' if selected_status == 'stopped' }}>已停止</option>
+      <option value="profit"  {{ 'selected' if selected_status == 'profit' }}>已止盈</option>
+      <option value="loss"    {{ 'selected' if selected_status == 'loss' }}>已止损</option>
     </select>
     <select name="bought" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
       <option value="">已买+未买</option>
