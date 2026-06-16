@@ -35,12 +35,17 @@
       <option value="1" {{ 'selected' if selected_bought == '1' }}>已买</option>
       <option value="0" {{ 'selected' if selected_bought == '0' }}>未买</option>
     </select>
-    {% if selected_fw or selected_status or selected_entry or selected_bought %}
+    <select name="source" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
+      <option value="">全部来源</option>
+      <option value="paper" {{ 'selected' if selected_source == 'paper' }}>模拟</option>
+      <option value="real"  {{ 'selected' if selected_source == 'real' }}>真实</option>
+    </select>
+    {% if selected_fw or selected_status or selected_entry or selected_bought or selected_source %}
     <a href="{{ url_for('recommendations') }}" class="btn btn-outline-secondary btn-sm">
       <i class="bi bi-x me-1"></i>清除
     </a>
     {% endif %}
-    <span class="text-muted ms-auto" style="font-size:.8rem;">共 {{ rows|length }} 条</span>
+    <span class="text-muted ms-auto" style="font-size:.8rem;">共 {{ total }} 条</span>
   </form>
 </div>
 
@@ -70,6 +75,8 @@
             <a href="{{ url_for('detail', rec_id=r.id) }}" class="fw-bold" onclick="event.stopPropagation()">{{ r.ticker }}</a>
             <small class="text-muted">{{ r.market }}</small>
             {% if r.monitoring %}<span class="monitor-badge ms-1">🔔</span>{% endif %}
+            {% if r.is_expired_validity %}<span class="expiry-past ms-1">效期已过</span>
+            {% elif r.is_expiring_soon %}<span class="expiry-soon ms-1">即将到期</span>{% endif %}
           </td>
           <td>
             {% set el = r.entry_rec_label %}
@@ -80,6 +87,9 @@
           <td style="font-size:.875rem; font-weight:500;">${{ "%.2f"|format(r.entry_price) }}</td>
           <td style="font-size:.875rem;">
             {% if r.latest_price %}${{ "%.2f"|format(r.latest_price) }}
+            {% if r.days_since_update is not none and r.days_since_update >= 14 and r.status == 'active' %}
+            <div class="{{ 'stale-error' if r.days_since_update >= 30 else 'stale-warn' }}">{{ r.days_since_update }}d前</div>
+            {% endif %}
             {% else %}<span class="text-muted">—</span>{% endif %}
           </td>
           <td>
@@ -108,6 +118,25 @@
   <i class="bi bi-search d-block"></i>
   <div class="fw-bold mb-1">没有符合条件的记录</div>
   <a href="{{ url_for('recommendations') }}" class="btn btn-outline-secondary btn-sm mt-2">清除筛选</a>
+</div>
+{% endif %}
+
+{% if pages > 1 %}
+<div class="card mt-3">
+  <div class="pagination-bar">
+    <a href="?{{ filter_qs }}{% if filter_qs %}&{% endif %}page={{ page - 1 }}"
+       class="page-btn {% if page == 1 %}disabled{% endif %}">‹</a>
+    {% for p in range(1, pages + 1) %}
+      {% if p == 1 or p == pages or (p >= page - 2 and p <= page + 2) %}
+      <a href="?{{ filter_qs }}{% if filter_qs %}&{% endif %}page={{ p }}"
+         class="page-btn {% if p == page %}active{% endif %}">{{ p }}</a>
+      {% elif p == page - 3 or p == page + 3 %}
+      <span class="page-btn disabled">…</span>
+      {% endif %}
+    {% endfor %}
+    <a href="?{{ filter_qs }}{% if filter_qs %}&{% endif %}page={{ page + 1 }}"
+       class="page-btn {% if page == pages %}disabled{% endif %}">›</a>
+  </div>
 </div>
 {% endif %}
 {% endblock %}

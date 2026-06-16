@@ -2,21 +2,26 @@
 {% block title %}{{ row.ticker }} 详情{% endblock %}
 
 {% block content %}
-<div class="mb-3 d-flex gap-3 align-items-center">
-  {% if row.session_id %}
-  <a href="{{ url_for('session_detail', session_id=row.session_id) }}" class="text-muted" style="font-size:.85rem;">
-    <i class="bi bi-arrow-left me-1"></i>返回会话
+<div class="mb-3 d-flex justify-content-between align-items-center">
+  <div class="d-flex gap-3 align-items-center">
+    {% if row.session_id %}
+    <a href="{{ url_for('session_detail', session_id=row.session_id) }}" class="text-muted" style="font-size:.85rem;">
+      <i class="bi bi-arrow-left me-1"></i>返回会话
+    </a>
+    {% else %}
+    <a href="{{ url_for('recommendations') }}" class="text-muted" style="font-size:.85rem;">
+      <i class="bi bi-arrow-left me-1"></i>返回列表
+    </a>
+    {% endif %}
+    {% if row.session_question %}
+    <span class="text-muted" style="font-size:.78rem;">
+      <i class="bi bi-collection me-1"></i>{{ row.session_question }}
+    </span>
+    {% endif %}
+  </div>
+  <a href="{{ url_for('edit_rec', rec_id=row.id) }}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-pencil me-1"></i>编辑
   </a>
-  {% else %}
-  <a href="{{ url_for('recommendations') }}" class="text-muted" style="font-size:.85rem;">
-    <i class="bi bi-arrow-left me-1"></i>返回列表
-  </a>
-  {% endif %}
-  {% if row.session_question %}
-  <span class="text-muted" style="font-size:.78rem;">
-    <i class="bi bi-collection me-1"></i>{{ row.session_question }}
-  </span>
-  {% endif %}
 </div>
 
 <!-- Verdict card (top, most prominent) -->
@@ -61,6 +66,11 @@
         {% endif %}
       </div>
       <div style="font-size:.78rem; color:var(--text-muted);">最后更新 {{ row.latest_date }}</div>
+      {% if row.days_since_update is not none and row.days_since_update >= 14 and row.status == 'active' %}
+      <div class="{{ 'stale-error' if row.days_since_update >= 30 else 'stale-warn' }}">
+        <i class="bi bi-exclamation-triangle me-1"></i>价格已 {{ row.days_since_update }} 天未更新
+      </div>
+      {% endif %}
       {% else %}
       <div style="color:var(--text-muted);">未录入价格</div>
       {% endif %}
@@ -278,11 +288,30 @@
             </div>
           </div>
           <div class="col-6 mt-1"><div class="text-muted">参考入场价</div><div class="fw-bold">${{ "%.2f"|format(row.entry_price) }}</div></div>
-          <div class="col-6 mt-1"><div class="text-muted">止损 (-8%)</div><div class="text-loss fw-bold">{% if row.stop_loss_price %}${{ "%.2f"|format(row.stop_loss_price) }}{% else %}—{% endif %}</div></div>
-          <div class="col-6"><div class="text-muted">目标1 (+15%)</div><div class="text-win fw-bold">{% if row.target1_price %}${{ "%.2f"|format(row.target1_price) }}{% else %}—{% endif %}</div></div>
-          <div class="col-6"><div class="text-muted">目标2 (+30%)</div><div class="text-win fw-bold">{% if row.target2_price %}${{ "%.2f"|format(row.target2_price) }}{% else %}—{% endif %}</div></div>
+          <div class="col-6 mt-1">
+            <div class="text-muted">止损{% if row.framework == 'momentum' %} (-8%){% endif %}</div>
+            <div class="text-loss fw-bold">{% if row.stop_loss_price %}${{ "%.2f"|format(row.stop_loss_price) }}{% else %}—{% endif %}</div>
+          </div>
+          <div class="col-6">
+            <div class="text-muted">目标1{% if row.framework == 'momentum' %} (+15%){% endif %}</div>
+            <div class="text-win fw-bold">{% if row.target1_price %}${{ "%.2f"|format(row.target1_price) }}{% else %}—{% endif %}</div>
+          </div>
+          <div class="col-6">
+            <div class="text-muted">目标2{% if row.framework == 'momentum' %} (+30%){% endif %}</div>
+            <div class="text-win fw-bold">{% if row.target2_price %}${{ "%.2f"|format(row.target2_price) }}{% else %}—{% endif %}</div>
+          </div>
           {% if row.validity_date %}
-          <div class="col-12 mt-1"><div class="text-muted">机会有效期</div><div>{{ row.validity_date }}</div></div>
+          <div class="col-12 mt-1">
+            <div class="text-muted">机会有效期</div>
+            <div>
+              {{ row.validity_date }}
+              {% if row.is_expired_validity %}
+              <span class="expiry-past ms-1">已过期 {{ -row.days_until_expiry }} 天</span>
+              {% elif row.is_expiring_soon %}
+              <span class="expiry-soon ms-1">{{ row.days_until_expiry }} 天后到期</span>
+              {% endif %}
+            </div>
+          </div>
           {% endif %}
         </div>
       </div>

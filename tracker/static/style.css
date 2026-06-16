@@ -217,6 +217,35 @@ body {
   padding: 1rem; background: var(--surface2); border-radius: 6px;
 }
 
+/* Stale price warning */
+.stale-warn  { color: #9a6700; font-size: .72rem; }
+.stale-error { color: #cf222e; font-size: .72rem; }
+
+/* Validity expiry badges */
+.expiry-soon {
+  background: #fff8c5; color: #9a6700; border: 1px solid #f0c419;
+  font-size: .7rem; padding: .2em .5em; border-radius: 4px; font-weight: 600;
+}
+.expiry-past {
+  background: #ffebe9; color: #cf222e; border: 1px solid #ffcecb;
+  font-size: .7rem; padding: .2em .5em; border-radius: 4px; font-weight: 600;
+}
+
+/* Pagination */
+.pagination-bar {
+  display: flex; gap: .4rem; align-items: center; justify-content: center;
+  padding: .75rem 1rem;
+}
+.page-btn {
+  min-width: 2rem; height: 2rem; display: inline-flex; align-items: center;
+  justify-content: center; border-radius: 4px; font-size: .8rem;
+  border: 1px solid var(--border); color: var(--text-muted);
+  text-decoration: none; background: var(--surface);
+}
+.page-btn:hover { background: var(--surface2); color: var(--text); text-decoration: none; }
+.page-btn.active { background: var(--blue); color: #fff !important; border-color: var(--blue); font-weight: 600; }
+.page-btn.disabled { opacity: .4; pointer-events: none; }
+
 /* Divider label */
 .divider-label {
   display: flex; align-items: center; gap: .75rem;
