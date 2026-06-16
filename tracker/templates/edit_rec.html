@@ -113,33 +113,23 @@
             </div>
           </div>
           <div class="col-sm-4">
-            <label class="form-label">止损价{% if row.framework == 'momentum' %} <small class="text-muted">(-8%，自动)</small>{% endif %}</label>
+            <label class="form-label">止损价{% if row.fw_stop_label %} <small class="text-muted">({{ row.fw_stop_label }}，自动)</small>{% endif %}</label>
             <div class="input-group">
               <span class="input-group-text">$</span>
               <input type="number" name="stop_loss_price" id="stopPrice" class="form-control"
                      step="0.0001"
                      value="{{ '%.4f'|format(row.stop_loss_price) if row.stop_loss_price else '' }}"
-                     {{ 'readonly' if row.framework == 'momentum' }}>
+                     {{ 'readonly' if row.fw_stop_label }}>
             </div>
           </div>
           <div class="col-sm-4">
-            <label class="form-label">目标1{% if row.framework == 'momentum' %} <small class="text-muted">(+15%，自动)</small>{% endif %}</label>
+            <label class="form-label">止盈目标{% if row.fw_target_label %} <small class="text-muted">({{ row.fw_target_label }}，自动)</small>{% endif %}</label>
             <div class="input-group">
               <span class="input-group-text">$</span>
               <input type="number" name="target1_price" id="target1Price" class="form-control"
                      step="0.0001"
                      value="{{ '%.4f'|format(row.target1_price) if row.target1_price else '' }}"
-                     {{ 'readonly' if row.framework == 'momentum' }}>
-            </div>
-          </div>
-          <div class="col-sm-4">
-            <label class="form-label">目标2{% if row.framework == 'momentum' %} <small class="text-muted">(+30%，自动)</small>{% endif %}</label>
-            <div class="input-group">
-              <span class="input-group-text">$</span>
-              <input type="number" name="target2_price" id="target2Price" class="form-control"
-                     step="0.0001"
-                     value="{{ '%.4f'|format(row.target2_price) if row.target2_price else '' }}"
-                     {{ 'readonly' if row.framework == 'momentum' }}>
+                     {{ 'readonly' if row.fw_target_label }}>
             </div>
           </div>
           <div class="col-12">
@@ -240,14 +230,20 @@
 {% endblock %}
 
 {% block scripts %}
-{% if row.framework == 'momentum' %}
+{% if row.fw_stop_label %}
 <script>
+const FW_DEFAULTS = {
+  momentum:    { stop: 0.88, target: 1.25 },
+  fundamental: { stop: 0.85, target: 1.40 },
+  supply_chain:{ stop: 0.88, target: 1.25 },
+  radar:       { stop: 0.90, target: 1.20 },
+};
 function updateTargets() {
   const entry = parseFloat(document.getElementById('entryPrice').value);
-  if (!isNaN(entry) && entry > 0) {
-    document.getElementById('stopPrice').value  = (entry * 0.92).toFixed(4);
-    document.getElementById('target1Price').value = (entry * 1.15).toFixed(4);
-    document.getElementById('target2Price').value = (entry * 1.30).toFixed(4);
+  const def = FW_DEFAULTS['{{ row.framework }}'];
+  if (def && !isNaN(entry) && entry > 0) {
+    document.getElementById('stopPrice').value   = (entry * def.stop).toFixed(4);
+    document.getElementById('target1Price').value = (entry * def.target).toFixed(4);
   }
 }
 </script>

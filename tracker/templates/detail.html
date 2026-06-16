@@ -31,7 +31,8 @@
       <div class="d-flex align-items-center gap-2 mb-1">
         <span style="font-size:1.6rem; font-weight:800;">{{ row.ticker }}</span>
         <small class="text-muted">{{ row.market }}</small>
-        {% if row.is_bought %}<span class="badge-real">已买</span>{% endif %}
+        {% if row.is_paper %}<span class="badge-paper">模拟</span>{% endif %}
+        {% if row.is_bought %}<span class="badge-real">实盘</span>{% endif %}
         {% if row.monitoring %}<span class="monitor-badge">🔔 监控中</span>{% endif %}
       </div>
       <div class="verdict-main">
@@ -131,9 +132,6 @@
           {% if row.target1_price %}
           <span>目标1 <span class="text-win fw-bold">${{ "%.2f"|format(row.target1_price) }}</span></span>
           {% endif %}
-          {% if row.target2_price %}
-          <span>目标2 <span class="text-win fw-bold">${{ "%.2f"|format(row.target2_price) }}</span></span>
-          {% endif %}
         </div>
       </div>
     </div>
@@ -141,20 +139,22 @@
 
     <!-- Bought toggle -->
     <div class="card mb-3">
-      <div class="card-body p-3 d-flex justify-content-between align-items-center">
-        <div>
-          <div class="fw-semibold" style="font-size:.875rem;">
-            {% if row.is_bought %}💰 已买入{% else %}已买入了吗？{% endif %}
-          </div>
-          <div class="text-muted" style="font-size:.8rem;">
-            {% if row.is_bought %}点击可改回"未买"{% else %}如果你实际买了这只，点这里标记{% endif %}
-          </div>
+      <div class="card-body p-3">
+        <div class="fw-semibold mb-2" style="font-size:.875rem;">买入情况</div>
+        <div class="d-flex gap-2">
+          <form method="post" action="{{ url_for('toggle_bought', rec_id=row.id) }}" class="flex-fill">
+            <input type="hidden" name="type" value="paper">
+            <button type="submit" class="btn btn-sm w-100 {% if row.is_paper %}btn-primary{% else %}btn-outline-secondary{% endif %}">
+              {% if row.is_paper %}🟣 模拟 ✓{% else %}模拟盘{% endif %}
+            </button>
+          </form>
+          <form method="post" action="{{ url_for('toggle_bought', rec_id=row.id) }}" class="flex-fill">
+            <input type="hidden" name="type" value="real">
+            <button type="submit" class="btn btn-sm w-100 {% if row.is_bought %}btn-warning{% else %}btn-outline-secondary{% endif %}">
+              {% if row.is_bought %}💰 实盘 ✓{% else %}实盘{% endif %}
+            </button>
+          </form>
         </div>
-        <form method="post" action="{{ url_for('toggle_bought', rec_id=row.id) }}">
-          <button type="submit" class="btn btn-sm {% if row.is_bought %}btn-warning{% else %}btn-outline-secondary{% endif %}">
-            {% if row.is_bought %}已买 ✓{% else %}标记为已买{% endif %}
-          </button>
-        </form>
       </div>
     </div>
 
@@ -287,16 +287,12 @@
           </div>
           <div class="col-6 mt-1"><div class="text-muted">参考入场价</div><div class="fw-bold">${{ "%.2f"|format(row.entry_price) }}</div></div>
           <div class="col-6 mt-1">
-            <div class="text-muted">止损{% if row.framework == 'momentum' %} (-8%){% endif %}</div>
+            <div class="text-muted">止损{% if row.fw_stop_label %} ({{ row.fw_stop_label }}){% endif %}</div>
             <div class="text-loss fw-bold">{% if row.stop_loss_price %}${{ "%.2f"|format(row.stop_loss_price) }}{% else %}—{% endif %}</div>
           </div>
-          <div class="col-6">
-            <div class="text-muted">目标1{% if row.framework == 'momentum' %} (+15%){% endif %}</div>
+          <div class="col-6 mt-1">
+            <div class="text-muted">止盈目标{% if row.fw_target_label %} ({{ row.fw_target_label }}){% endif %}</div>
             <div class="text-win fw-bold">{% if row.target1_price %}${{ "%.2f"|format(row.target1_price) }}{% else %}—{% endif %}</div>
-          </div>
-          <div class="col-6">
-            <div class="text-muted">目标2{% if row.framework == 'momentum' %} (+30%){% endif %}</div>
-            <div class="text-win fw-bold">{% if row.target2_price %}${{ "%.2f"|format(row.target2_price) }}{% else %}—{% endif %}</div>
           </div>
           {% if row.validity_date %}
           <div class="col-12 mt-1">

@@ -30,11 +30,20 @@ def _resolve_db_path():
 DB_PATH = _resolve_db_path()
 
 FRAMEWORKS = {
-    "momentum": "动量催化框架",
+    "momentum":    "动量催化框架",
     "fundamental": "基本面研究框架",
-    "supply_chain": "供应链瓶颈框架",
-    "radar": "每日扫描雷达",
-    "ad_hoc": "临时问询",
+    "supply_chain":"供应链瓶颈框架",
+    "radar":       "每日扫描雷达",
+    "ad_hoc":      "临时问询",
+}
+
+# stop_pct / target_pct as multipliers; None = user must fill manually
+FRAMEWORK_DEFAULTS = {
+    "momentum":    {"stop_pct": 0.88, "target_pct": 1.25, "stop_label": "-12%", "target_label": "+25%"},
+    "fundamental": {"stop_pct": 0.85, "target_pct": 1.40, "stop_label": "-15%", "target_label": "+40%"},
+    "supply_chain":{"stop_pct": 0.88, "target_pct": 1.25, "stop_label": "-12%", "target_label": "+25%"},
+    "radar":       {"stop_pct": 0.90, "target_pct": 1.20, "stop_label": "-10%", "target_label": "+20%"},
+    "ad_hoc":      None,
 }
 
 ENTRY_REC = {
@@ -171,6 +180,7 @@ def init_db():
         "wait_condition": "TEXT DEFAULT ''",
         "validity_date": "DATE",
         "monitoring": "INTEGER DEFAULT 0",
+        "is_paper": "INTEGER DEFAULT 0",
     }
     for col, coldef in new_cols.items():
         if col not in existing:
@@ -231,6 +241,9 @@ def enrich_rows(rows):
         r["risk_info"] = RISK_LEVEL.get(r.get("risk_level") or "medium", RISK_LEVEL["medium"])
         r["hold_label"] = HOLD_PERIOD.get(r.get("hold_period") or "short", "")
         r["strategy_label"] = STRATEGY_TYPE.get(r.get("strategy_type") or "momentum", "")
+        fw_def = FRAMEWORK_DEFAULTS.get(r["framework"])
+        r["fw_stop_label"]   = fw_def["stop_label"]   if fw_def else None
+        r["fw_target_label"] = fw_def["target_label"] if fw_def else None
 
         sess = sessions_map.get(r.get("session_id"))
         r["session_question"] = sess["question"] if sess else ""
@@ -298,7 +311,7 @@ def compute_stats():
         - 不碰（反向预测）：跌穿 -8% = 对，涨过 +15% = 错
         - 仅观察/等回落：不计入（没有方向判断）
         """
-        if r["entry_rec"] == "immediate" or r.get("is_bought"):
+        if r["entry_rec"] == "immediate" or r.get("is_bought") or r.get("is_paper"):
             if r["status"] == "profit":
                 return "win"
             if r["status"] == "loss":
@@ -494,8 +507,12 @@ def recommendations():
         where += " AND source_type=?"; params.append(source)
     if entry_rec_filter:
         where += " AND entry_rec=?"; params.append(entry_rec_filter)
-    if bought_filter != "":
-        where += " AND is_bought=?"; params.append(int(bought_filter))
+    if bought_filter == "real":
+        where += " AND is_bought=1"
+    elif bought_filter == "paper":
+        where += " AND is_paper=1"
+    elif bought_filter == "none":
+        where += " AND is_bought=0 AND (is_paper IS NULL OR is_paper=0)"
 
     conn = get_db()
     total = conn.execute("SELECT COUNT(*) FROM recommendations" + where, params).fetchone()[0]
@@ -533,23 +550,22 @@ def edit_rec(rec_id):
     if request.method == "POST":
         entry_price = float(request.form.get("entry_price") or row["entry_price"])
         framework = row["framework"]
-        if framework == "momentum" and entry_price:
-            stop = round(entry_price * 0.92, 4)
-            t1 = round(entry_price * 1.15, 4)
-            t2 = round(entry_price * 1.30, 4)
+        fw_def = FRAMEWORK_DEFAULTS.get(framework)
+        if fw_def and entry_price:
+            stop = round(entry_price * fw_def["stop_pct"], 4)
+            t1   = round(entry_price * fw_def["target_pct"], 4)
         else:
             stop = float(request.form.get("stop_loss_price") or 0) or None
-            t1 = float(request.form.get("target1_price") or 0) or None
-            t2 = float(request.form.get("target2_price") or 0) or None
+            t1   = float(request.form.get("target1_price") or 0) or None
         wait_price_raw = request.form.get("wait_price", "")
         conn.execute(
             """UPDATE recommendations SET
-               entry_price=?, stop_loss_price=?, target1_price=?, target2_price=?,
+               entry_price=?, stop_loss_price=?, target1_price=?,
                entry_rec=?, risk_level=?, hold_period=?, strategy_type=?,
                catalyst=?, wait_price=?, wait_condition=?, validity_date=?,
                conviction=?, notes=?, signals=?
                WHERE id=?""",
-            (entry_price, stop, t1, t2,
+            (entry_price, stop, t1,
              request.form.get("entry_rec", row["entry_rec"]),
              request.form.get("risk_level", row["risk_level"]),
              request.form.get("hold_period", row["hold_period"]),
@@ -605,26 +621,25 @@ def add():
         wait_condition = request.form.get("wait_condition", "")
         validity_date = request.form.get("validity_date") or None
 
-        if framework == "momentum":
-            stop = round(entry_price * 0.92, 4)
-            t1 = round(entry_price * 1.15, 4)
-            t2 = round(entry_price * 1.30, 4)
+        fw_def = FRAMEWORK_DEFAULTS.get(framework)
+        if fw_def and entry_price:
+            stop = round(entry_price * fw_def["stop_pct"], 4)
+            t1   = round(entry_price * fw_def["target_pct"], 4)
         else:
             stop = float(request.form.get("stop_loss_price") or 0) or None
-            t1 = float(request.form.get("target1_price") or 0) or None
-            t2 = float(request.form.get("target2_price") or 0) or None
+            t1   = float(request.form.get("target1_price") or 0) or None
 
         conn = get_db()
         cur = conn.execute(
             """INSERT INTO recommendations
-               (is_bought, session_id, created_at, ticker, market, framework, entry_price,
-                stop_loss_price, target1_price, target2_price, signals,
+               (is_bought, is_paper, session_id, created_at, ticker, market, framework, entry_price,
+                stop_loss_price, target1_price, signals,
                 conviction, source_type, notes,
                 entry_rec, risk_level, hold_period, strategy_type,
                 catalyst, wait_price, wait_condition, validity_date)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (0, sid, created_at, ticker, market, framework, entry_price,
-             stop, t1, t2, json.dumps(signals, ensure_ascii=False),
+            (0, 0, sid, created_at, ticker, market, framework, entry_price,
+             stop, t1, json.dumps(signals, ensure_ascii=False),
              conviction, source_type, notes,
              entry_rec, risk_level, hold_period, strategy_type,
              catalyst, wait_price, wait_condition, validity_date),
@@ -695,7 +710,7 @@ def update_price(rec_id):
     msg = f"价格已更新：${price:.2f}（{pct:+.1f}%）"
     # 止损/止盈只对真实或模拟持仓生效（立即可入 / 已买入）；
     # 观察、等回落、不碰类是预测记录，不存在持仓，不触发
-    is_position = row["entry_rec"] == "immediate" or row["is_bought"]
+    is_position = row["entry_rec"] == "immediate" or row["is_bought"] or (row["is_paper"] if "is_paper" in row.keys() else 0)
     if row["status"] == "active" and is_position:
         if row["stop_loss_price"] and price <= row["stop_loss_price"]:
             conn.execute(
@@ -715,13 +730,19 @@ def update_price(rec_id):
 
 @app.route("/rec/<int:rec_id>/toggle_bought", methods=["POST"])
 def toggle_bought(rec_id):
+    type_ = request.form.get("type", "real")
     conn = get_db()
-    row = conn.execute("SELECT is_bought, ticker FROM recommendations WHERE id=?", (rec_id,)).fetchone()
-    new_val = 0 if row["is_bought"] else 1
-    conn.execute("UPDATE recommendations SET is_bought=? WHERE id=?", (new_val, rec_id))
+    row = conn.execute("SELECT is_bought, is_paper, ticker FROM recommendations WHERE id=?", (rec_id,)).fetchone()
+    if type_ == "paper":
+        new_val = 0 if (row["is_paper"] or 0) else 1
+        conn.execute("UPDATE recommendations SET is_paper=? WHERE id=?", (new_val, rec_id))
+        flash(("已标记为模拟盘买入" if new_val else "已取消模拟盘") + f" — {row['ticker']}", "success")
+    else:
+        new_val = 0 if row["is_bought"] else 1
+        conn.execute("UPDATE recommendations SET is_bought=? WHERE id=?", (new_val, rec_id))
+        flash(("💰 已标记为实盘买入" if new_val else "已取消实盘") + f" — {row['ticker']}", "success")
     conn.commit()
     conn.close()
-    flash(("💰 已标记为真实买入" if new_val else "已改回未买入") + f" — {row['ticker']}", "success")
     return redirect(url_for("detail", rec_id=rec_id))
 
 
@@ -892,27 +913,26 @@ def api_add_rec():
     data = request.get_json()
     entry_price = float(data.get("entry_price", 0))
     framework = data.get("framework", "momentum")
-    if framework == "momentum" and entry_price:
-        stop = round(entry_price * 0.92, 4)
-        t1 = round(entry_price * 1.15, 4)
-        t2 = round(entry_price * 1.30, 4)
+    fw_def = FRAMEWORK_DEFAULTS.get(framework)
+    if fw_def and entry_price:
+        stop = round(entry_price * fw_def["stop_pct"], 4)
+        t1   = round(entry_price * fw_def["target_pct"], 4)
     else:
         stop = data.get("stop_loss_price")
-        t1 = data.get("target1_price")
-        t2 = data.get("target2_price")
+        t1   = data.get("target1_price")
     conn = get_db()
     cur = conn.execute(
         """INSERT INTO recommendations
-           (is_bought, session_id, created_at, ticker, market, framework, entry_price,
-            stop_loss_price, target1_price, target2_price, signals,
+           (is_bought, is_paper, session_id, created_at, ticker, market, framework, entry_price,
+            stop_loss_price, target1_price, signals,
             conviction, source_type, notes,
             entry_rec, risk_level, hold_period, strategy_type,
             catalyst, wait_price, wait_condition, validity_date)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (data.get("is_bought", 0),
+        (data.get("is_bought", 0), data.get("is_paper", 0),
          data.get("session_id"), data.get("created_at", str(date.today())),
          data["ticker"].upper(), data.get("market", "US"),
-         framework, entry_price, stop, t1, t2,
+         framework, entry_price, stop, t1,
          json.dumps(data.get("signals", []), ensure_ascii=False),
          data.get("conviction", 3), data.get("source_type", "paper"),
          data.get("notes", ""),

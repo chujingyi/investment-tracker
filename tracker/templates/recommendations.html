@@ -31,9 +31,10 @@
       <option value="loss"    {{ 'selected' if selected_status == 'loss' }}>已止损</option>
     </select>
     <select name="bought" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
-      <option value="">已买+未买</option>
-      <option value="1" {{ 'selected' if selected_bought == '1' }}>已买</option>
-      <option value="0" {{ 'selected' if selected_bought == '0' }}>未买</option>
+      <option value="">全部买入</option>
+      <option value="real"  {{ 'selected' if selected_bought == 'real' }}>实盘已买</option>
+      <option value="paper" {{ 'selected' if selected_bought == 'paper' }}>模拟已买</option>
+      <option value="none"  {{ 'selected' if selected_bought == 'none' }}>未买</option>
     </select>
     <select name="source" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
       <option value="">全部来源</option>
@@ -100,9 +101,9 @@
             {% else %}<span class="text-muted">—</span>{% endif %}
           </td>
           <td>
-            {% if r.is_bought %}
-            <span class="badge-real">已买</span>
-            {% else %}
+            {% if r.is_paper %}<span class="badge-paper">模拟</span>{% endif %}
+            {% if r.is_bought %}<span class="badge-real">实盘</span>{% endif %}
+            {% if not r.is_paper and not r.is_bought %}
             <span class="text-muted" style="font-size:.8rem;">未买</span>
             {% endif %}
           </td>

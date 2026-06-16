@@ -142,19 +142,19 @@
             </div>
           </div>
           <div class="col-sm-4">
-            <label class="form-label">止损价 <small class="text-muted">(-8%)</small></label>
+            <label class="form-label">止损价 <small class="text-muted" id="stopLabel"></small></label>
             <div class="input-group">
               <span class="input-group-text">$</span>
               <input type="number" name="stop_loss_price" id="stopPrice" class="form-control"
-                     step="0.0001" placeholder="自动" readonly>
+                     step="0.0001" placeholder="自动">
             </div>
           </div>
           <div class="col-sm-4">
-            <label class="form-label">目标1 <small class="text-muted">(+15%)</small></label>
+            <label class="form-label">止盈目标 <small class="text-muted" id="targetLabel"></small></label>
             <div class="input-group">
               <span class="input-group-text">$</span>
               <input type="number" name="target1_price" id="target1Price" class="form-control"
-                     step="0.0001" placeholder="自动" readonly>
+                     step="0.0001" placeholder="自动">
             </div>
           </div>
           <div class="col-12">
@@ -248,23 +248,41 @@ const fw = document.getElementById('frameworkSelect');
 const mSigs = document.getElementById('momentumSignals');
 const fSigs = document.getElementById('fundamentalSignals');
 
+const FW_DEFAULTS = {
+  momentum:    { stop: 0.88, target: 1.25, stopLabel: '-12%', targetLabel: '+25%' },
+  fundamental: { stop: 0.85, target: 1.40, stopLabel: '-15%', targetLabel: '+40%' },
+  supply_chain:{ stop: 0.88, target: 1.25, stopLabel: '-12%', targetLabel: '+25%' },
+  radar:       { stop: 0.90, target: 1.20, stopLabel: '-10%', targetLabel: '+20%' },
+};
+
 function updateTargets() {
   const entry = parseFloat(document.getElementById('entryPrice').value);
-  const isMomentum = fw.value === 'momentum';
-  if (!isNaN(entry) && entry > 0 && isMomentum) {
-    document.getElementById('stopPrice').value = (entry * 0.92).toFixed(4);
-    document.getElementById('target1Price').value = (entry * 1.15).toFixed(4);
+  const def = FW_DEFAULTS[fw.value];
+  const stopEl = document.getElementById('stopPrice');
+  const t1El = document.getElementById('target1Price');
+  if (def) {
+    document.getElementById('stopLabel').textContent = def.stopLabel;
+    document.getElementById('targetLabel').textContent = def.targetLabel;
+    stopEl.readOnly = true;
+    t1El.readOnly = true;
+    if (!isNaN(entry) && entry > 0) {
+      stopEl.value = (entry * def.stop).toFixed(4);
+      t1El.value   = (entry * def.target).toFixed(4);
+    } else {
+      stopEl.value = '';
+      t1El.value   = '';
+    }
   } else {
-    document.getElementById('stopPrice').value = '';
-    document.getElementById('target1Price').value = '';
+    document.getElementById('stopLabel').textContent = '';
+    document.getElementById('targetLabel').textContent = '';
+    stopEl.readOnly = false;
+    t1El.readOnly = false;
   }
 }
 
 fw.addEventListener('change', function() {
   mSigs.classList.toggle('d-none', this.value !== 'momentum');
   fSigs.classList.toggle('d-none', this.value !== 'fundamental');
-  document.getElementById('stopPrice').readOnly = this.value === 'momentum';
-  document.getElementById('target1Price').readOnly = this.value === 'momentum';
   updateTargets();
 });
 
