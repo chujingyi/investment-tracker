@@ -8,7 +8,26 @@ import os
 app = Flask(__name__)
 app.secret_key = "tracker-2026"
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "data", "tracker.db")
+
+def _resolve_db_path():
+    """Always use the main worktree's database so all worktrees share one source of truth."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        import subprocess
+        out = subprocess.check_output(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=here, stderr=subprocess.DEVNULL,
+        ).decode()
+        main_root = out.strip().split("\n")[0].replace("worktree ", "").strip()
+        candidate = os.path.join(main_root, "tracker", "data", "tracker.db")
+        if os.path.isdir(os.path.dirname(candidate)):
+            return candidate
+    except Exception:
+        pass
+    return os.path.join(here, "data", "tracker.db")
+
+
+DB_PATH = _resolve_db_path()
 
 FRAMEWORKS = {
     "momentum": "动量催化框架",
@@ -34,12 +53,14 @@ ENTRY_REC_LABEL = {
 }
 
 STATUS_LABEL = {
-    "active":  "追踪中",
-    "stopped": "已止损",
-    "target1": "止盈1",
-    "target2": "止盈2",
-    "closed":  "已关闭",
-    "expired": "已过期",
+    "active":   "追踪中",
+    "stopped":  "已止损",
+    "target1":  "止盈1",
+    "target2":  "止盈2",
+    "closed":   "已关闭",
+    "expired":  "已过期",
+    "waiting":  "等待中",
+    "tracking": "追踪中",
 }
 
 RISK_LEVEL = {
@@ -52,6 +73,8 @@ HOLD_PERIOD = {
     "short":  "短线 (<2周)",
     "medium": "中线 (2-8周)",
     "long":   "长线 (2月+)",
+    "6-12月": "中长线 (6-12月)",
+    "-":      "—",
 }
 
 STRATEGY_TYPE = {
@@ -166,58 +189,107 @@ def calc_pct(entry, current):
     return None
 
 
-def enrich_row(row):
-    r = dict(row)
-    sig = r.get("signals") or "[]"
+def _parse_signals(raw):
+    if not raw:
+        return []
     try:
-        r["signals"] = json.loads(sig)
+        result = json.loads(raw)
+        return result if isinstance(result, list) else []
     except (json.JSONDecodeError, ValueError):
-        # Fallback: treat as semicolon-separated text
-        r["signals"] = [s.strip() for s in sig.split(";") if s.strip()]
-    r["framework_name"] = FRAMEWORKS.get(r["framework"], r["framework"])
-    r["entry_rec_info"] = ENTRY_REC.get(r.get("entry_rec") or "watch", ENTRY_REC["watch"])
-    r["entry_rec_label"] = ENTRY_REC_LABEL.get(r.get("entry_rec") or "watch", ENTRY_REC_LABEL["watch"])
-    r["status_label"] = STATUS_LABEL.get(r.get("status") or "active", r.get("status", ""))
-    r["risk_info"] = RISK_LEVEL.get(r.get("risk_level") or "medium", RISK_LEVEL["medium"])
-    r["hold_label"] = HOLD_PERIOD.get(r.get("hold_period") or "short", "")
-    r["strategy_label"] = STRATEGY_TYPE.get(r.get("strategy_type") or "momentum", "")
-    r["pct_change"] = None
+        return [s.strip() for s in raw.split(";") if s.strip()]
+
+
+def enrich_rows(rows):
+    if not rows:
+        return []
+    rows = [dict(r) for r in rows]
+    ids = [r["id"] for r in rows]
+    session_ids = list({r["session_id"] for r in rows if r.get("session_id")})
     conn = get_db()
-    snap = conn.execute(
-        "SELECT price, snapshot_date FROM price_snapshots WHERE recommendation_id=? ORDER BY snapshot_date DESC LIMIT 1",
-        (r["id"],),
-    ).fetchone()
-    if r.get("session_id"):
-        sess = conn.execute("SELECT question, theme FROM analysis_sessions WHERE id=?", (r["session_id"],)).fetchone()
+    snaps = {}
+    if ids:
+        ph = ",".join("?" * len(ids))
+        for s in conn.execute(
+            f"SELECT recommendation_id, price, snapshot_date FROM price_snapshots "
+            f"WHERE recommendation_id IN ({ph}) ORDER BY snapshot_date DESC", ids
+        ).fetchall():
+            rid = s["recommendation_id"]
+            if rid not in snaps:
+                snaps[rid] = dict(s)
+    sessions_map = {}
+    if session_ids:
+        ph = ",".join("?" * len(session_ids))
+        for s in conn.execute(
+            f"SELECT id, question, theme FROM analysis_sessions WHERE id IN ({ph})", session_ids
+        ).fetchall():
+            sessions_map[s["id"]] = dict(s)
+    conn.close()
+
+    today = date.today()
+    for r in rows:
+        r["signals"] = _parse_signals(r.get("signals"))
+        r["framework_name"] = FRAMEWORKS.get(r["framework"], r["framework"])
+        r["entry_rec_info"] = ENTRY_REC.get(r.get("entry_rec") or "watch", ENTRY_REC["watch"])
+        r["entry_rec_label"] = ENTRY_REC_LABEL.get(r.get("entry_rec") or "watch", ENTRY_REC_LABEL["watch"])
+        r["status_label"] = STATUS_LABEL.get(r.get("status") or "active", r.get("status", ""))
+        r["risk_info"] = RISK_LEVEL.get(r.get("risk_level") or "medium", RISK_LEVEL["medium"])
+        r["hold_label"] = HOLD_PERIOD.get(r.get("hold_period") or "short", "")
+        r["strategy_label"] = STRATEGY_TYPE.get(r.get("strategy_type") or "momentum", "")
+
+        sess = sessions_map.get(r.get("session_id"))
         r["session_question"] = sess["question"] if sess else ""
         r["session_theme"] = sess["theme"] if sess else ""
-    else:
-        r["session_question"] = ""
-        r["session_theme"] = ""
-    conn.close()
-    if snap:
-        r["latest_price"] = snap["price"]
-        r["latest_date"] = snap["snapshot_date"]
-        r["pct_change"] = calc_pct(r["entry_price"], snap["price"])
-    elif r["close_price"]:
-        r["latest_price"] = r["close_price"]
-        r["latest_date"] = r["close_date"]
-        r["pct_change"] = calc_pct(r["entry_price"], r["close_price"])
-    else:
-        r["latest_price"] = None
-        r["latest_date"] = None
-    r["price_alert"] = False
-    if r.get("monitoring") and r.get("wait_price") and r.get("latest_price"):
-        gap_pct = abs(r["latest_price"] - r["wait_price"]) / r["wait_price"] * 100
-        r["price_alert"] = gap_pct <= 3
-    return r
+
+        snap = snaps.get(r["id"])
+        r["pct_change"] = None
+        if snap:
+            r["latest_price"] = snap["price"]
+            r["latest_date"] = snap["snapshot_date"]
+            r["pct_change"] = calc_pct(r["entry_price"], snap["price"])
+            try:
+                r["days_since_update"] = (today - date.fromisoformat(snap["snapshot_date"])).days
+            except Exception:
+                r["days_since_update"] = None
+        elif r.get("close_price"):
+            r["latest_price"] = r["close_price"]
+            r["latest_date"] = r["close_date"]
+            r["pct_change"] = calc_pct(r["entry_price"], r["close_price"])
+            r["days_since_update"] = None
+        else:
+            r["latest_price"] = None
+            r["latest_date"] = None
+            r["days_since_update"] = None
+
+        r["days_until_expiry"] = None
+        r["is_expired_validity"] = False
+        r["is_expiring_soon"] = False
+        if r.get("validity_date") and r.get("status") == "active":
+            try:
+                vd = date.fromisoformat(r["validity_date"])
+                diff = (vd - today).days
+                r["days_until_expiry"] = diff
+                r["is_expired_validity"] = diff < 0
+                r["is_expiring_soon"] = 0 <= diff <= 3
+            except Exception:
+                pass
+
+        r["price_alert"] = False
+        if r.get("monitoring") and r.get("wait_price") and r.get("latest_price"):
+            gap_pct = abs(r["latest_price"] - r["wait_price"]) / r["wait_price"] * 100
+            r["price_alert"] = gap_pct <= 3
+
+    return rows
+
+
+def enrich_row(row):
+    return enrich_rows([row])[0]
 
 
 def compute_stats():
     conn = get_db()
     rows = conn.execute("SELECT * FROM recommendations").fetchall()
     conn.close()
-    rows = [enrich_row(r) for r in rows]
+    rows = enrich_rows(rows)
     total = len(rows)
     active = sum(1 for r in rows if r["status"] == "active")
     immediate = sum(1 for r in rows if r.get("entry_rec") == "immediate" and r["status"] == "active")
@@ -290,8 +362,8 @@ def dashboard():
         "SELECT * FROM recommendations WHERE monitoring=1 AND status='active' ORDER BY created_at DESC"
     ).fetchall()
     conn.close()
-    recent_recs = [enrich_row(r) for r in recent_recs]
-    monitoring_recs = [enrich_row(r) for r in monitoring_recs]
+    recent_recs = enrich_rows(recent_recs)
+    monitoring_recs = enrich_rows(monitoring_recs)
     stats = compute_stats()
     sessions_list = []
     for s in sessions:
@@ -396,9 +468,12 @@ def session_detail(session_id):
     if not session:
         flash("会话不存在", "danger")
         return redirect(url_for("sessions"))
-    recs = [enrich_row(r) for r in recs]
+    recs = enrich_rows(recs)
     return render_template("session_detail.html", session=dict(session), recs=recs,
                            entry_rec=ENTRY_REC, today=str(date.today()))
+
+
+PER_PAGE = 50
 
 
 @app.route("/recommendations")
@@ -408,31 +483,104 @@ def recommendations():
     source = request.args.get("source", "")
     entry_rec_filter = request.args.get("entry_rec", "")
     bought_filter = request.args.get("bought", "")
+    try:
+        page = max(1, int(request.args.get("page", 1) or 1))
+    except (ValueError, TypeError):
+        page = 1
 
-    query = "SELECT * FROM recommendations WHERE 1=1"
+    where = " WHERE 1=1"
     params = []
     if framework:
-        query += " AND framework=?"; params.append(framework)
+        where += " AND framework=?"; params.append(framework)
     if status:
-        query += " AND status=?"; params.append(status)
+        where += " AND status=?"; params.append(status)
     if source:
-        query += " AND source_type=?"; params.append(source)
+        where += " AND source_type=?"; params.append(source)
     if entry_rec_filter:
-        query += " AND entry_rec=?"; params.append(entry_rec_filter)
+        where += " AND entry_rec=?"; params.append(entry_rec_filter)
     if bought_filter != "":
-        query += " AND is_bought=?"; params.append(int(bought_filter))
-    query += " ORDER BY created_at DESC"
+        where += " AND is_bought=?"; params.append(int(bought_filter))
 
     conn = get_db()
-    rows = conn.execute(query, params).fetchall()
+    total = conn.execute("SELECT COUNT(*) FROM recommendations" + where, params).fetchone()[0]
+    rows = conn.execute(
+        "SELECT * FROM recommendations" + where + " ORDER BY created_at DESC LIMIT ? OFFSET ?",
+        params + [PER_PAGE, (page - 1) * PER_PAGE],
+    ).fetchall()
     conn.close()
-    rows = [enrich_row(r) for r in rows]
+    rows = enrich_rows(rows)
+    pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+    filter_qs = "&".join(
+        f"{k}={v}" for k, v in [
+            ("framework", framework), ("status", status), ("source", source),
+            ("entry_rec", entry_rec_filter), ("bought", bought_filter),
+        ] if v
+    )
     return render_template(
         "recommendations.html", rows=rows, frameworks=FRAMEWORKS,
         entry_rec_map=ENTRY_REC,
         selected_fw=framework, selected_status=status,
         selected_source=source, selected_entry=entry_rec_filter,
         selected_bought=bought_filter,
+        page=page, pages=pages, total=total, filter_qs=filter_qs,
+    )
+
+
+@app.route("/rec/<int:rec_id>/edit", methods=["GET", "POST"])
+def edit_rec(rec_id):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM recommendations WHERE id=?", (rec_id,)).fetchone()
+    if not row:
+        conn.close()
+        flash("记录不存在", "danger")
+        return redirect(url_for("recommendations"))
+    if request.method == "POST":
+        entry_price = float(request.form.get("entry_price") or row["entry_price"])
+        framework = row["framework"]
+        if framework == "momentum" and entry_price:
+            stop = round(entry_price * 0.92, 4)
+            t1 = round(entry_price * 1.15, 4)
+            t2 = round(entry_price * 1.30, 4)
+        else:
+            stop = float(request.form.get("stop_loss_price") or 0) or None
+            t1 = float(request.form.get("target1_price") or 0) or None
+            t2 = float(request.form.get("target2_price") or 0) or None
+        wait_price_raw = request.form.get("wait_price", "")
+        conn.execute(
+            """UPDATE recommendations SET
+               entry_price=?, stop_loss_price=?, target1_price=?, target2_price=?,
+               entry_rec=?, risk_level=?, hold_period=?, strategy_type=?,
+               catalyst=?, wait_price=?, wait_condition=?, validity_date=?,
+               conviction=?, notes=?, signals=?
+               WHERE id=?""",
+            (entry_price, stop, t1, t2,
+             request.form.get("entry_rec", row["entry_rec"]),
+             request.form.get("risk_level", row["risk_level"]),
+             request.form.get("hold_period", row["hold_period"]),
+             request.form.get("strategy_type", row["strategy_type"]),
+             request.form.get("catalyst", ""),
+             float(wait_price_raw) if wait_price_raw else None,
+             request.form.get("wait_condition", ""),
+             request.form.get("validity_date") or None,
+             int(request.form.get("conviction") or row["conviction"] or 3),
+             request.form.get("notes", ""),
+             json.dumps(request.form.getlist("signals"), ensure_ascii=False),
+             rec_id),
+        )
+        conn.commit()
+        conn.close()
+        flash(f"已更新 {row['ticker']}", "success")
+        return redirect(url_for("detail", rec_id=rec_id))
+    conn.close()
+    row = dict(row)
+    row["signals"] = _parse_signals(row.get("signals"))
+    return render_template(
+        "edit_rec.html", row=row, frameworks=FRAMEWORKS,
+        momentum_signals=MOMENTUM_SIGNALS,
+        fundamental_signals=FUNDAMENTAL_SIGNALS,
+        entry_rec=ENTRY_REC, risk_level=RISK_LEVEL,
+        hold_period=HOLD_PERIOD, strategy_type=STRATEGY_TYPE,
+        today=str(date.today()),
     )
 
 
