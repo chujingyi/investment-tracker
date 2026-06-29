@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}知识库{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h5 class="fw-bold mb-0">知识库</h5>
+    <div class="text-muted" style="font-size:.82rem;">行业研究、投资框架、主题分析沉淀</div>
+  </div>
+  <a href="{{ url_for('knowledge_add') }}" class="btn btn-success btn-sm">
+    <i class="bi bi-plus me-1"></i>新建文章
+  </a>
+</div>
+
+<!-- Category tabs -->
+<div class="filter-bar mb-3">
+  <form method="get" class="d-flex flex-wrap gap-2 align-items-center">
+    <a href="{{ url_for('knowledge') }}{% if q %}?q={{ q }}{% endif %}"
+       class="btn btn-sm {% if not selected_cat %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
+      全部 <span class="ms-1 text-muted" style="font-size:.75rem;">{{ counts.values()|sum }}</span>
+    </a>
+    {% for k, v in kb_categories.items() %}
+    <a href="{{ url_for('knowledge', category=k) }}{% if q %}&q={{ q }}{% endif %}"
+       class="btn btn-sm {% if selected_cat == k %}btn-secondary{% else %}btn-outline-secondary{% endif %}">
+      {{ v }}
+      {% if counts.get(k) %}<span class="ms-1 text-muted" style="font-size:.75rem;">{{ counts[k] }}</span>{% endif %}
+    </a>
+    {% endfor %}
+
+    <div class="ms-auto d-flex gap-2">
+      <input type="hidden" name="category" value="{{ selected_cat }}">
+      <input type="search" name="q" class="form-control form-control-sm" style="width:180px;"
+             placeholder="搜索标题/标签/内容…" value="{{ q }}">
+      <button type="submit" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-search"></i>
+      </button>
+      {% if q or selected_cat %}
+      <a href="{{ url_for('knowledge') }}" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-x"></i>
+      </a>
+      {% endif %}
+    </div>
+  </form>
+</div>
+
+{% if rows %}
+<div class="row g-3">
+  {% for art in rows %}
+  <div class="col-md-6 col-lg-4">
+    <a href="{{ url_for('knowledge_detail', art_id=art.id) }}" class="text-decoration-none">
+      <div class="card h-100 kb-card">
+        <div class="card-body p-3">
+          <div class="d-flex justify-content-between align-items-start mb-2">
+            <span class="kb-cat-badge kb-cat-{{ art.category }}">{{ kb_categories.get(art.category, art.category) }}</span>
+            <span class="text-muted" style="font-size:.72rem;">{{ art.updated_at }}</span>
+          </div>
+          <div class="fw-semibold mb-1" style="color:var(--text); font-size:.95rem;">{{ art.title }}</div>
+          {% if art.summary %}
+          <div class="text-muted" style="font-size:.82rem; line-height:1.5; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;">{{ art.summary }}</div>
+          {% endif %}
+          {% if art.tags %}
+          <div class="mt-2 d-flex flex-wrap gap-1">
+            {% for tag in art.tags.split(',') %}
+            {% if tag.strip() %}
+            <span class="theme-badge">{{ tag.strip() }}</span>
+            {% endif %}
+            {% endfor %}
+          </div>
+          {% endif %}
+        </div>
+      </div>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+  <i class="bi bi-journal-bookmark d-block"></i>
+  <div class="fw-bold mb-1">{% if q or selected_cat %}没有符合条件的文章{% else %}知识库还是空的{% endif %}</div>
+  <div class="text-muted mb-3" style="font-size:.85rem;">把行业研究、框架理解沉淀在这里</div>
+  <a href="{{ url_for('knowledge_add') }}" class="btn btn-success btn-sm">新建第一篇</a>
+</div>
+{% endif %}
+{% endblock %}

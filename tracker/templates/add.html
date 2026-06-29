@@ -248,12 +248,8 @@ const fw = document.getElementById('frameworkSelect');
 const mSigs = document.getElementById('momentumSignals');
 const fSigs = document.getElementById('fundamentalSignals');
 
-const FW_DEFAULTS = {
-  momentum:    { stop: 0.88, target: 1.25, stopLabel: '-12%', targetLabel: '+25%' },
-  fundamental: { stop: 0.85, target: 1.40, stopLabel: '-15%', targetLabel: '+40%' },
-  supply_chain:{ stop: 0.88, target: 1.25, stopLabel: '-12%', targetLabel: '+25%' },
-  radar:       { stop: 0.90, target: 1.20, stopLabel: '-10%', targetLabel: '+20%' },
-};
+// FW_DEFAULTS injected from backend (single source of truth)
+const FW_DEFAULTS = {{ fw_defaults_json | safe }};
 
 function updateTargets() {
   const entry = parseFloat(document.getElementById('entryPrice').value);

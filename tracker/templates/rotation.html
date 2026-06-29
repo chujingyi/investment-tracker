@@ -1,0 +1,709 @@
+{% extends "base.html" %}
+{% block title %}轮动雷达{% endblock %}
+
+{% set STATUS_MAP = {
+  'done':    {'label':'主升浪已完成','class':'rot-badge-done','bar':'rot-bar-done','dot':'dot-done'},
+  'active':  {'label':'高潮期','class':'rot-badge-active','bar':'rot-bar-active','dot':'dot-active'},
+  'early':   {'label':'启动早期','class':'rot-badge-early','bar':'rot-bar-early','dot':'dot-early'},
+  'brewing': {'label':'蓄势中','class':'rot-badge-brewing','bar':'rot-bar-brewing','dot':'dot-brewing'},
+  'idle':    {'label':'未启动','class':'rot-badge-idle','bar':'rot-bar-idle','dot':'dot-idle'},
+} %}
+{% set ACTION_MAP = {
+  'exit':'不追','hold':'持有/等回调','enter':'重点关注',
+  'watch':'观察，等信号','wait':'埋伏等待','split':'分化操作','future':'未来布局',
+} %}
+
+{% block content %}
+<div class="mb-4 d-flex justify-content-between align-items-start flex-wrap gap-2">
+  <div>
+    <h5 class="fw-bold mb-0"><i class="bi bi-arrow-repeat me-2"></i>AI 超级周期轮动雷达</h5>
+    <div class="text-muted" style="font-size:.82rem;">资金按波次顺序流动 · 数据驱动 · 供应链 × 时间维度</div>
+  </div>
+  <div class="d-flex align-items-center gap-2">
+    {% if active_wave %}
+    <span class="badge rounded-pill" style="background:{{ active_wave.color }}20;color:{{ active_wave.color }};font-size:.75rem;padding:.35rem .75rem;border:1px solid {{ active_wave.color }}40;">
+      <i class="bi bi-broadcast me-1"></i>当前：W{{ active_wave.wave_num }} {{ active_wave.name }}
+    </span>
+    {% endif %}
+    <span class="text-muted" style="font-size:.75rem;">总进度 {{ total_progress }}%</span>
+  </div>
+</div>
+
+<!-- ═══ Tab Switcher ═══ -->
+<div class="d-flex gap-1 mb-4" style="border-bottom:1px solid var(--border-color);padding-bottom:0;">
+  <button class="rot-tab-btn active" data-view="waves" onclick="switchRotView('waves')">
+    <i class="bi bi-grid-3x3-gap me-1"></i>波次视图
+  </button>
+  <button class="rot-tab-btn" data-view="fusion" onclick="switchRotView('fusion')">
+    <i class="bi bi-diagram-3 me-1"></i>供应链融合
+  </button>
+  <button class="rot-tab-btn" data-view="timeline" onclick="switchRotView('timeline')">
+    <i class="bi bi-clock-history me-1"></i>时间线
+  </button>
+</div>
+
+<!-- ═════════ VIEW 1: Wave Cards ═════════ -->
+<div id="view-waves" class="rot-view">
+
+  <!-- Overall progress bar -->
+  <div class="card mb-4" style="background:var(--card-bg);border:1px solid var(--border-color);">
+    <div class="card-body py-3">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="fw-semibold" style="font-size:.85rem;">超级周期总进度</span>
+        <span class="text-muted" style="font-size:.78rem;">{{ waves|selectattr('status','in',['active','early'])|list|length }} 波活跃 / 共 {{ waves|length }} 波</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat({{ waves|length }},1fr);gap:3px;height:28px;">
+        {% for w in waves %}
+        {% set st = STATUS_MAP.get(w.status, STATUS_MAP.idle) %}
+        <div class="rot-wave-bar {{ st.bar }}" title="W{{ w.wave_num }} · {{ w.name }}">
+          <span>{{ w.wave_num }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="d-flex gap-3 mt-2 flex-wrap" style="font-size:.72rem;color:var(--text-muted);">
+        <span><span class="dot-done"></span> 已完成</span>
+        <span><span class="dot-active"></span> 高潮期</span>
+        <span><span class="dot-early"></span> 启动早期</span>
+        <span><span class="dot-brewing"></span> 蓄势中</span>
+        <span><span class="dot-idle"></span> 未启动</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Wave cards grid -->
+  <div class="row g-3">
+    {% for w in waves %}
+    {% set st = STATUS_MAP.get(w.status, STATUS_MAP.idle) %}
+    {% set act = ACTION_MAP.get(w.action_type, '观察') %}
+    <div class="col-12 col-lg-6">
+      <div class="rot-card rot-card-{{ w.status }}" data-wave="{{ w.wave_num }}" data-sc-nodes="{{ w.sc_node_ids|join(',') }}">
+        <!-- Card header -->
+        <div class="rot-card-header">
+          <div class="d-flex align-items-center gap-2">
+            <div class="rot-wave-num" style="background:{{ w.color }}20;color:{{ w.color }};border:1px solid {{ w.color }}40;">
+              W{{ w.wave_num }}
+            </div>
+            <i class="bi {{ w.icon }}" style="color:{{ w.color }};font-size:1rem;"></i>
+            <span class="fw-semibold" style="font-size:.9rem;">{{ w.name }}</span>
+            {% if w.category %}
+            <span class="badge rounded-pill" style="font-size:.65rem;background:rgba(255,255,255,.08);color:var(--text-muted);">{{ w.category }}</span>
+            {% endif %}
+          </div>
+          <span class="rot-state-badge {{ st.class }}">{{ st.label }}</span>
+        </div>
+
+        <!-- Progress bar -->
+        <div class="mb-2 mt-1">
+          <div class="d-flex justify-content-between" style="font-size:.72rem;color:var(--text-muted);margin-bottom:3px;">
+            <span>波次进度</span><span>{{ w.progress_pct }}%</span>
+          </div>
+          <div style="background:var(--border-color);border-radius:4px;height:6px;overflow:hidden;">
+            <div style="background:{{ w.color }};width:{{ w.progress_pct }}%;height:6px;border-radius:4px;transition:width .5s;"></div>
+          </div>
+        </div>
+
+        <!-- Tickers with live data -->
+        <div class="d-flex flex-wrap gap-1 mb-2">
+          {% for t in w.enriched_tickers %}
+          {% if t.tracked %}
+          <a href="/detail/{{ t.rec_id }}" class="rot-ticker rot-ticker-tracked"
+             title="{{ t.symbol }} | 入场${{ '%.0f'|format(t.entry_price) if t.entry_price else '?' }}
+当前${{ '%.0f'|format(t.current_price) if t.current_price else '?' }}
+{{ '%+.1f%%'|format(t.pnl_pct) if t.pnl_pct is not none else '' }}
+监控:{{ t.monitor_status }}">
+            {{ t.symbol }}
+            <span style="color:#f0c000">★</span>
+            {% if t.current_price %}
+            <span class="ticker-price {{ 'price-up' if t.pnl_pct and t.pnl_pct > 0 else 'price-down' if t.pnl_pct and t.pnl_pct < 0 else '' }}">
+              ${{ '%.0f'|format(t.current_price) }}
+            </span>
+            {% endif %}
+            {% if t.monitor_status and t.monitor_status != 'idle' %}
+            <span class="mon-status mon-{{ t.monitor_status }}">{{ t.monitor_status }}</span>
+            {% endif %}
+          </a>
+          {% else %}
+          <span class="rot-ticker">{{ t.symbol }}</span>
+          {% endif %}
+          {% endfor %}
+        </div>
+
+        <!-- Signal text -->
+        <div class="rot-signal">
+          <i class="bi bi-info-circle me-1" style="color:{{ w.color }};"></i>
+          <span style="font-size:.78rem;">{{ w.signal_text }}</span>
+        </div>
+
+        <!-- Catalyst events for this wave -->
+        {% if w.catalysts %}
+        <div class="mt-2">
+          <div class="fw-semibold mb-1" style="font-size:.75rem;color:var(--text-muted);">
+            <i class="bi bi-lightning me-1"></i>近期催化剂
+          </div>
+          {% for c in w.catalysts %}
+          <div class="d-flex align-items-center gap-2 py-1 px-2 rounded" style="background:rgba(255,255,255,.03);font-size:.75rem;margin-bottom:2px;">
+            <span class="cat-dot cat-{{ c.event_type }}"></span>
+            <span style="color:var(--text-muted);min-width:70px;">{{ c.event_date[5:] if c.event_date else '' }}</span>
+            <span class="flex-grow-1 text-truncate">{{ c.title or c.description[:50] if c.description else '' }}</span>
+            <span class="badge" style="font-size:.6rem;background:rgba(255,255,255,.06);">{{ c.event_type }}</span>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        <!-- Action button -->
+        <div class="mt-2 d-flex justify-content-end">
+          <span class="rot-action rot-action-{{ w.action_type }}">{{ act }}</span>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- Framework note -->
+  <div class="card mt-4" style="background:var(--card-bg);border:1px solid var(--border-color);">
+    <div class="card-body py-3">
+      <div class="fw-semibold mb-2" style="font-size:.85rem;"><i class="bi bi-lightbulb me-1 text-warning"></i>使用说明</div>
+      <div class="row g-3" style="font-size:.78rem;color:var(--text-muted);">
+        <div class="col-md-4">
+          <div class="fw-semibold text-body mb-1">数据驱动</div>
+          波次数据来自数据库，ticker 自动关联推荐标的的实时价格和监控状态。★ 标记表示当前追踪中的标的。
+        </div>
+        <div class="col-md-4">
+          <div class="fw-semibold text-body mb-1">识别轮换信号</div>
+          当前波龙头开始<strong>跑输指数</strong> → 资金在轮出。下一波细分开始<strong>超预期</strong> → 资金在流入。核心看「相对强弱」而非绝对涨跌。
+        </div>
+        <div class="col-md-4">
+          <div class="fw-semibold text-body mb-1">三视图联动</div>
+          波次视图看详情，供应链融合看环节关系，时间线看资金流动节奏。点击带 ★ 的 ticker 可跳转到标的详情页。
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════ VIEW 2: Supply Chain Fusion ═════════ -->
+<div id="view-fusion" class="rot-view" style="display:none;">
+  <div class="d-flex gap-3" style="height:680px;">
+    <!-- Cytoscape graph -->
+    <div class="card flex-grow-1 p-0 position-relative" style="min-width:0;overflow:hidden;">
+      <div id="cy-fusion" style="width:100%;height:100%;"></div>
+      <div style="position:absolute;top:10px;right:12px;font-size:10px;color:#aaa;background:rgba(255,255,255,.8);padding:2px 8px;border-radius:99px;">
+        拖拽平移 · 滚轮缩放
+      </div>
+      <div style="position:absolute;bottom:10px;left:10px;display:flex;flex-direction:column;gap:4px;">
+        <button class="btn btn-sm btn-outline-secondary" style="width:30px;height:30px;padding:0;" onclick="cyFusion.zoom(cyFusion.zoom()*1.25)">+</button>
+        <button class="btn btn-sm btn-outline-secondary" style="width:30px;height:30px;padding:0;" onclick="cyFusion.fit(undefined,24)">⊡</button>
+        <button class="btn btn-sm btn-outline-secondary" style="width:30px;height:30px;padding:0;" onclick="cyFusion.zoom(cyFusion.zoom()*0.8)">−</button>
+      </div>
+    </div>
+
+    <!-- Right panel: wave info + node detail -->
+    <div class="d-flex flex-column gap-3" style="width:300px;min-width:300px;">
+      <!-- Wave selector cards -->
+      <div id="fusion-waves" class="d-flex flex-column gap-2" style="overflow-y:auto;max-height:320px;">
+        {% for w in waves %}
+        {% set st = STATUS_MAP.get(w.status, STATUS_MAP.idle) %}
+        <div class="fusion-wave-card" data-wave="{{ w.wave_num }}" data-nodes="{{ w.sc_node_ids|join(',') }}"
+             style="border-left:3px solid {{ w.color }};cursor:pointer;"
+             onmouseover="highlightScNodes('{{ w.sc_node_ids|join(',') }}', '{{ w.color }}')"
+             onmouseout="resetScHighlight()">
+          <div class="d-flex align-items-center gap-2 mb-1">
+            <span class="fw-bold" style="font-size:.8rem;color:{{ w.color }};">W{{ w.wave_num }}</span>
+            <span style="font-size:.78rem;">{{ w.name }}</span>
+            <span class="rot-state-badge {{ st.class }}" style="font-size:.6rem;">{{ st.label }}</span>
+          </div>
+          <div style="background:var(--border-color);border-radius:4px;height:4px;">
+            <div style="background:{{ w.color }};width:{{ w.progress_pct }}%;height:4px;border-radius:4px;"></div>
+          </div>
+          <div class="mt-1 d-flex flex-wrap gap-1">
+            {% for t in w.enriched_tickers %}
+            <span class="rot-ticker" style="font-size:.68rem;padding:1px 5px;">
+              {{ t.symbol }}{% if t.tracked %}★{% endif %}
+            </span>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <!-- Node detail panel -->
+      <div id="fusion-detail" class="card p-3 flex-grow-1" style="overflow-y:auto;font-size:.83rem;">
+        <div class="text-muted text-center" style="margin-top:60px;line-height:2;font-size:.8rem;">
+          点击左侧图谱节点<br>查看该环节详情与关联波次
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════ VIEW 3: Timeline ═════════ -->
+<div id="view-timeline" class="rot-view" style="display:none;">
+  <div class="card" style="background:var(--card-bg);border:1px solid var(--border-color);">
+    <div class="card-body">
+      <!-- Phase labels -->
+      <div class="d-flex mb-3" style="font-size:.72rem;color:var(--text-muted);padding-left:100px;">
+        <div style="flex:1;text-align:center;">2024 Q1<br><b>算力爆发</b></div>
+        <div style="flex:1;text-align:center;">2024 Q3<br><b>存储验证</b></div>
+        <div style="flex:1;text-align:center;">2025 H1<br><b>光通信放量</b></div>
+        <div style="flex:1;text-align:center;">2025 H2<br><b>基建加速</b></div>
+        <div style="flex:1;text-align:center;">2026<br><b>电力瓶颈</b></div>
+        <div style="flex:1;text-align:center;">2027+<br><b>应用落地</b></div>
+      </div>
+
+      <!-- Timeline rows -->
+      <div id="timeline-rows">
+        {% for w in waves %}
+        {% set st = STATUS_MAP.get(w.status, STATUS_MAP.idle) %}
+        {% set act = ACTION_MAP.get(w.action_type, '观察') %}
+        <div class="tl-row" data-wave="{{ w.wave_num }}">
+          <div class="tl-label" style="border-left:3px solid {{ w.color }};">
+            <span class="fw-bold" style="color:{{ w.color }};font-size:.8rem;">W{{ w.wave_num }}</span>
+            <span style="font-size:.72rem;">{{ w.name }}</span>
+            <span class="mon-status mon-{{ w.status }}" style="font-size:.6rem;">{{ st.label }}</span>
+          </div>
+          <div class="tl-track">
+            <!-- Progress bar segment -->
+            <div class="tl-bar" style="background:linear-gradient(90deg,{{ w.color }}40,{{ w.color }});width:{{ w.progress_pct * 7 }}%;opacity:{{ 0.4 + w.progress_pct / 200 }};">
+              <span class="tl-bar-label">{{ w.progress_pct }}%</span>
+            </div>
+            <!-- Future dashed segment -->
+            {% if w.progress_pct < 100 %}
+            <div class="tl-bar tl-bar-future" style="left:{{ w.progress_pct * 7 }}%;width:{{ (100 - w.progress_pct) * 7 }}%;">
+            </div>
+            {% endif %}
+            <!-- Catalyst markers -->
+            {% for c in w.catalysts %}
+            <div class="tl-marker" style="left:{{ loop.index * 8 + 5 }}%;" title="{{ c.title or c.notes }}">
+              <span class="cat-dot cat-{{ c.event_type }}" style="transform:scale(1.3);"></span>
+            </div>
+            {% endfor %}
+            <!-- Ticker chips inside bar -->
+            <div class="tl-chips">
+              {% for t in w.enriched_tickers %}
+              <span class="tl-chip{% if t.tracked %} tl-chip-tracked{% endif %}"
+                    {% if t.rec_id %}onclick="window.location.href='/detail/{{ t.rec_id }}'" style="cursor:pointer;"{% endif %}>
+                {{ t.symbol }}{% if t.tracked %}★{% endif %}
+                {% if t.current_price %}<small>${{ '%.0f'|format(t.current_price) }}</small>{% endif %}
+              </span>
+              {% endfor %}
+            </div>
+          </div>
+          <div class="tl-action">
+            <span class="rot-action rot-action-{{ w.action_type }}" style="font-size:.68rem;">{{ act }}</span>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <!-- Legend -->
+      <div class="d-flex gap-4 mt-3 pt-2" style="font-size:.7rem;color:var(--text-muted);border-top:1px solid var(--border-color);">
+        <span><span class="tl-bar" style="width:30px;height:8px;display:inline-block;vertical-align:middle;border-radius:2px;"></span> 已完成进度</span>
+        <span><span class="tl-bar tl-bar-future" style="width:30px;height:8px;display:inline-block;vertical-align:middle;border-radius:2px;"></span> 未来预期</span>
+        <span><span class="cat-dot cat-earnings" style="display:inline-block;vertical-align:middle;"></span> 财报</span>
+        <span><span class="cat-dot cat-event" style="display:inline-block;vertical-align:middle;"></span> 事件</span>
+        <span><span class="cat-dot cat-policy" style="display:inline-block;vertical-align:middle;"></span> 政策</span>
+        <span><span class="tl-chip tl-chip-tracked" style="display:inline;padding:1px 6px;font-size:.65rem;vertical-align:middle;">MU★</span> 追踪标的（可点击）</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
+<style>
+/* ── Tab buttons ── */
+.rot-tab-btn {
+  padding:8px 18px;border:none;background:transparent;
+  color:var(--text-muted);font-size:.83rem;font-weight:500;
+  cursor:pointer;border-bottom:2px solid transparent;
+  transition:all .2s;
+}
+.rot-tab-btn:hover { color:var(--text-body); }
+.rot-tab-btn.active {
+  color:var(--text-body);font-weight:600;
+  border-bottom-color:#22c55e;
+}
+
+/* ── Wave bars (top progress) ── */
+.rot-wave-bar {
+  display:flex;align-items:center;justify-content:center;
+  border-radius:4px;font-size:.7rem;font-weight:700;cursor:default;
+}
+.rot-bar-done    { background:#374151;color:#9ca3af; }
+.rot-bar-active  { background:#4c1d95;color:#c4b5fd;animation:pulse-rot 2s infinite; }
+.rot-bar-early   { background:#164e63;color:#67e8f9; }
+.rot-bar-brewing { background:#292524;color:#78716c; }
+.rot-bar-idle    { background:#111;color:#444; }
+@keyframes pulse-rot { 0%,100%{opacity:1}50%{opacity:.6} }
+
+.dot-done,.dot-active,.dot-early,.dot-brewing,.dot-idle {
+  display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:3px;vertical-align:middle;
+}
+.dot-done    { background:#9ca3af; }
+.dot-active  { background:#c4b5fd; }
+.dot-early   { background:#67e8f9; }
+.dot-brewing { background:#78716c; }
+.dot-idle    { background:#444; }
+
+/* ── Cards ── */
+.rot-card {
+  background:var(--card-bg);border:1px solid var(--border-color);
+  border-radius:10px;padding:1rem 1.1rem;transition:border-color .2s;
+}
+.rot-card:hover { border-color:rgba(255,255,255,.15); }
+.rot-card-active  { border-left:3px solid #7c3aed; }
+.rot-card-early   { border-left:3px solid #0891b2; }
+.rot-card-done    { border-left:3px solid #4b5563;opacity:.85; }
+.rot-card-brewing { border-left:3px solid #57534e; }
+.rot-card-idle    { border-left:3px solid #292524;opacity:.7; }
+
+.rot-card-header {
+  display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:.6rem;flex-wrap:wrap;gap:.4rem;
+}
+.rot-wave-num {
+  font-size:.7rem;font-weight:700;padding:.15rem .4rem;
+  border-radius:5px;min-width:28px;text-align:center;
+}
+.rot-state-badge {
+  font-size:.7rem;padding:.2rem .55rem;border-radius:20px;font-weight:600;white-space:nowrap;
+}
+.rot-badge-done    { background:#374151;color:#9ca3af; }
+.rot-badge-active  { background:#2e1065;color:#c4b5fd; }
+.rot-badge-early   { background:#0c4a6e;color:#7dd3fc; }
+.rot-badge-brewing { background:#1c1917;color:#a8a29e; }
+.rot-badge-idle    { background:#111;color:#555; }
+
+/* ── Tickers ── */
+.rot-ticker {
+  font-size:.72rem;font-weight:600;padding:.15rem .45rem;
+  border-radius:4px;background:rgba(255,255,255,.06);
+  color:var(--text-muted);font-family:monospace;
+}
+.rot-ticker-tracked {
+  background:rgba(240,200,0,.12);color:#f0c000;border:1px solid rgba(240,200,0,.25);
+  cursor:pointer;text-decoration:none;transition:background .15s;
+}
+.rot-ticker-tracked:hover { background:rgba(240,200,0,.2); }
+.ticker-price { font-size:.65rem;margin-left:3px;opacity:.8; }
+.price-up { color:#ef4444; }
+.price-down { color:#22c55e; }
+
+/* ── Monitor status badges on tickers ── */
+.mon-status {
+  font-size:.6rem;padding:1px 5px;border-radius:99px;font-weight:600;margin-left:3px;
+}
+.mon-triggered  { background:#dc262620;color:#f87171;border:1px solid #dc262640; }
+.mon-active     { background:#2563eb20;color:#60a5fa;border:1px solid #2563eb40; }
+.mon-skipped    { background:#374151;color:#9ca3af; }
+.mon-bought     { background:#05966920;color:#34d399;border:1px solid #05966940; }
+.mon-idle       { background:transparent;color:var(--text-muted);border:1px solid var(--border-color); }
+
+/* ── Signal & Action ── */
+.rot-signal {
+  background:rgba(255,255,255,.04);border-radius:6px;
+  padding:.45rem .6rem;line-height:1.5;color:var(--text-muted);
+}
+.rot-action {
+  font-size:.72rem;font-weight:700;padding:.2rem .6rem;border-radius:20px;
+}
+.rot-action-exit   { background:#374151;color:#9ca3af; }
+.rot-action-hold   { background:#1a3a2a;color:#4ade80; }
+.rot-action-enter  { background:#1e3a5f;color:#60a5fa; }
+.rot-action-watch  { background:#2d2d00;color:#fbbf24; }
+.rot-action-wait   { background:#1c1917;color:#a8a29e; }
+.rot-action-split  { background:#2d1b00;color:#fb923c; }
+.rot-action-future { background:#1a0533;color:#d8b4fe; }
+
+/* ── Catalyst dots ── */
+.cat-dot { display:inline-block;width:7px;height:7px;border-radius:50%;flex-shrink:0; }
+.cat-earnings  { background:#7c3aed; }
+.cat-event     { background:#0891b2; }
+.cat-policy    { background:#ea580c; }
+.cat-macro     { background:#16a34a; }
+.cat-catalyst  { background:#ca8a04; }
+.cat-dividend  { background:#e11d48; }
+.cat-ipo       { background:#7e22ce; }
+.cat-split     { background:#0891b220;color:#0891b2;border:1px solid #0891b240; }
+.cat-closed    { background:#444; }
+.cat-default   { background:#666; }
+
+/* ── Fusion view ── */
+.fusion-wave-card {
+  background:var(--card-bg);border:1px solid var(--border-color);
+  border-radius:8px;padding:.6rem .8rem;transition:all .2s;
+}
+.fusion-wave-card:hover { transform:translateX(-2px);box-shadow:0 2px 8px rgba(0,0,0,.15); }
+
+/* ── Timeline view ── */
+.tl-row { display:flex;align-items:center;gap:12px;margin-bottom:8px;min-height:42px; }
+.tl-label {
+  width:95px;min-width:95px;padding:6px 8px;font-size:.75rem;
+  background:var(--card-bg);border:1px solid var(--border-color);border-radius:6px;
+  display:flex;flex-direction:column;gap:2px;
+}
+.tl-track {
+  flex:1;position:relative;height:36px;
+  background:rgba(255,255,255,.02);border:1px solid var(--border-color);border-radius:6px;
+  overflow:visible;
+}
+.tl-bar {
+  position:absolute;top:4px;left:0;height:14px;border-radius:4px;
+  display:flex;align-items:center;padding-left:6px;
+}
+.tl-bar-label { font-size:.6rem;color:rgba(255,255,255,.7);font-weight:700; }
+.tl-bar-future {
+  height:14px;border-radius:4px;
+  border:1px dashed rgba(255,255,255,.15);background:transparent;top:4px;
+}
+.tl-marker {
+  position:absolute;top:-3px;width:12px;height:12px;
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;z-index:2;
+}
+.tl-marker:hover .cat-dot { transform:scale(1.8)!important; }
+.tl-chips {
+  position:absolute;bottom:2px;left:6px;display:flex;flex-wrap:wrap;gap:3px;
+}
+.tl-chip {
+  font-size:.62rem;font-weight:600;padding:1px 6px;border-radius:99px;
+  background:rgba(255,255,255,.06);color:var(--text-muted);font-family:monospace;
+  white-space:nowrap;
+}
+.tl-chip-tracked {
+  background:rgba(240,200,0,.1);color:#f0c000;border:1px solid rgba(240,200,0,.2);
+}
+.tl-action { width:70px;text-align:right; }
+</style>
+
+<script>
+// ── View switching ──
+function switchRotView(viewName) {
+  document.querySelectorAll('.rot-view').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.rot-tab-btn').forEach(btn => btn.classList.remove('active'));
+  document.getElementById('view-' + viewName).style.display = '';
+  document.querySelector(`.rot-tab-btn[data-view="${viewName}"]`).classList.add('active');
+
+  if (viewName === 'fusion' && !window.cyFusionReady) {
+    initFusionGraph();
+  }
+}
+
+// ── Supply Chain Fusion Graph ──
+const FCOLORS = {
+  material:'#8B7355', equipment:'#4472C4', chip_design:'#2196F3', foundry:'#1565C0',
+  memory:'#7B1FA2', optical:'#0097A7', server:'#E65100', power:'#388E3C',
+  dc_infra:'#F57F17', cloud:'#C62828', ai_model:'#BF360C', ai_app:'#4E342E'
+};
+const FCAT_LBL = {
+  material:'原材料', equipment:'半导体设备', chip_design:'芯片设计', foundry:'制造/封装',
+  memory:'存储', optical:'光通信/网络', server:'服务器/散热', power:'电力/能源',
+  dc_infra:'DC基础设施', cloud:'云平台', ai_model:'AI模型/软件', ai_app:'AI应用'
+};
+
+const FNODES = [
+  // Layer 0
+  {id:'wafer',    lbl:'硅晶圆',        layer:0, cat:'material',    co:'Shin-Etsu, Sumco, SK Siltronic', tr:[], desc:'芯片制造最基础的原料，300mm硅晶圆主导。AI算力扩张推动晶圆需求持续增长。'},
+  {id:'gas',      lbl:'特种气体',       layer:0, cat:'material',    co:'Air Products (APD), Linde (LIN)', tr:[], desc:'半导体制造不可或缺的超高纯气体，供应链高度集中。'},
+  {id:'resist',   lbl:'光刻胶/化学品',  layer:0, cat:'material',    co:'JSR, Merck KGaA, DuPont', tr:[], desc:'EUV光刻胶日本占主导，是卡脖子环节之一。'},
+  {id:'target',   lbl:'靶材/高纯金属',  layer:0, cat:'material',    co:'Materion (MTRN), Heraeus', tr:[], desc:'PVD物理气相沉积关键原料。'},
+  {id:'fiberraw', lbl:'光纤/光学原料',  layer:0, cat:'material',    co:'Corning (GLW), Prysmian', tr:[], desc:'AI数据中心大规模部署光纤互联。'},
+  // Layer 1
+  {id:'litho',    lbl:'光刻设备',       layer:1, cat:'equipment',   co:'ASML（垄断EUV）, Nikon', tr:[], desc:'ASML垄断EUV光刻机，全球最大半导体单点约束。'},
+  {id:'etch',     lbl:'刻蚀/沉积设备',  layer:1, cat:'equipment',   co:'AMAT, Lam Research (LRCX), TEL', tr:[], desc:'美国设备双雄。HBM叠层制造需大量此类设备。'},
+  {id:'inspect',  lbl:'检测/量测设备',  layer:1, cat:'equipment',   co:'KLA (KLAC), Onto Innovation', tr:[], desc:'KLA是晶圆缺陷检测市场绝对龙头。'},
+  {id:'testeq',   lbl:'芯片测试设备',   layer:1, cat:'equipment',   co:'Teradyne (TER), Advantest', tr:[], desc:'AI芯片封装后测试不可跳过。'},
+  {id:'mocvd',    lbl:'MOCVD/外延设备', layer:1, cat:'equipment',   co:'Veeco (VECO★), AIXTRON', tr:['VECO'], desc:'MOCVD用于生长GaN/InP外延层，光芯片制造核心设备。'},
+  // Layer 2
+  {id:'gpu',      lbl:'GPU/AI加速器',   layer:2, cat:'chip_design', co:'NVIDIA (NVDA), AMD', tr:[], desc:'NVDA H100/B200主导AI训练，市占超80%。'},
+  {id:'asic',     lbl:'ASIC定制AI芯片', layer:2, cat:'chip_design', co:'AVGO, MRVL, Google TPU', tr:[], desc:'超大规模云厂商自研ASIC绕开NVDA。'},
+  {id:'netchip',  lbl:'网络/交换芯片',  layer:2, cat:'chip_design', co:'Broadcom Tomahawk, MRVL, MTSI★', tr:['MTSI'], desc:'AI集群内部高速以太网和InfiniBand交换芯片。'},
+  {id:'cpu',      lbl:'CPU/通用计算',   layer:2, cat:'chip_design', co:'AMD EPYC, Intel Xeon', tr:[], desc:'AI服务器中GPU的调度员。'},
+  {id:'foundry',  lbl:'晶圆代工',       layer:2, cat:'foundry',     co:'TSMC（90%+）, Samsung', tr:[], desc:'TSMC 3nm/2nm代工是AI芯片生产最大瓶颈。'},
+  {id:'advpkg',   lbl:'先进封装CoWoS',  layer:2, cat:'foundry',     co:'TSMC CoWoS, Samsung', tr:[], desc:'HBM与GPU集成关键技术，产能极度稀缺。'},
+  {id:'osat',     lbl:'OSAT封装测试',   layer:2, cat:'foundry',     co:'Amkor (AMKR★), ASE Group', tr:['AMKR'], desc:'外包封装测试厂，受益AI芯片封装需求激增。'},
+  {id:'substrate',lbl:'基板/光掩模',    layer:2, cat:'foundry',     co:'Ibiden, PLAB★', tr:['PLAB'], desc:'ABF基板是AI GPU封装必需品。'},
+  // Layer 3
+  {id:'hbm',      lbl:'HBM高带宽存储',  layer:3, cat:'memory',      co:'SK Hynix, Micron (MU★), Samsung', tr:['MU'], desc:'AI最紧缺存储类型，供不应求持续到2026。'},
+  {id:'dram',     lbl:'DRAM服务器内存', layer:3, cat:'memory',      co:'Micron (MU★), SK Hynix', tr:['MU'], desc:'AI服务器每台512GB-2TB DDR5。'},
+  {id:'nand',     lbl:'NAND/企业SSD',   layer:3, cat:'memory',      co:'WDC, STX, Samsung', tr:[], desc:'数据中心海量训练数据存储。'},
+  {id:'memctrl',  lbl:'存储控制器',     layer:3, cat:'memory',      co:'MRVL, SIMO, Phison', tr:[], desc:'NAND读写核心芯片。'},
+  {id:'optchip',  lbl:'光芯片/激光器',  layer:3, cat:'optical',     co:'COHR★, LITE★, MACOM', tr:['COHR','LITE'], desc:'800G/1.6T光芯片快速放量。'},
+  {id:'optmod',   lbl:'光模块/收发器',  layer:3, cat:'optical',     co:'COHR★, Fabrinet (FN)', tr:['COHR'], desc:'GPU集群间互联全面光纤化。'},
+  {id:'switch',   lbl:'交换机/路由器',  layer:3, cat:'optical',     co:'ANET, CSCO, Juniper', tr:[], desc:'Arista是以太网替代InfiniBand趋势受益者。'},
+  {id:'intercon', lbl:'AI集群高速互联', layer:3, cat:'optical',     co:'NV InfiniBand, Broadcom Ethernet', tr:[], desc:'万卡GPU集群超低延迟互联。'},
+  // Layer 4
+  {id:'aiserver', lbl:'AI服务器整机',   layer:4, cat:'server',      co:'Dell, HPE, SMCI, 浪潮', tr:[], desc:'GB200 NVL72含72块Blackwell GPU，单价~$300万。'},
+  {id:'cooling',  lbl:'机架/液冷散热',  layer:4, cat:'server',      co:'VRT★, Asetek', tr:['VRT'], desc:'GB200功耗120kW/机架，液冷成为必选。'},
+  {id:'ups',      lbl:'电源/UPS系统',   layer:4, cat:'server',      co:'VRT★, Eaton, Delta', tr:['VRT'], desc:'数据中心不间断电源和配电系统。'},
+  {id:'nuclear',  lbl:'核电/清洁基荷',  layer:4, cat:'power',       co:'CEG★, VST, NRG', tr:['CEG'], desc:'科技巨头签署核电PPA，CEG是美国最大核电运营商。'},
+  {id:'fuelcell', lbl:'燃料电池/分布式',layer:4, cat:'power',       co:'BE★, Plug Power', tr:['BE'], desc:'燃料电池为数据中心提供分布式清洁电力。'},
+  {id:'grid',     lbl:'电网/变压器',    layer:4, cat:'power',       co:'GEV, ABB, Eaton', tr:[], desc:'变压器交货期延长至2年+，供给严重短缺。'},
+  {id:'batt',     lbl:'储能/电池系统',   layer:4, cat:'power',       co:'Fluence, Tesla Energy', tr:[], desc:'可再生能源配储能平滑供电波动。'},
+  // Layer 5
+  {id:'dcbuild',  lbl:'数据中心建设',   layer:5, cat:'dc_infra',    co:'PWR, FIX, AECOM', tr:[], desc:'AI数据中心建设工程，订单爆满。'},
+  {id:'dcops',    lbl:'数据中心运营商', layer:5, cat:'dc_infra',    co:'EQIX, DLR, IRM', tr:[], desc:'专业IDC运营商，估值快速重估。'},
+  {id:'satellite',lbl:'卫星通信/LEO',   layer:5, cat:'dc_infra',    co:'IRDM★, SATS★, ASTS★', tr:['IRDM','SATS','ASTS'], desc:'LEO卫星互联是下一代通信基础设施。'},
+  {id:'launch',   lbl:'商业航天/发射',  layer:5, cat:'dc_infra',    co:'RKLB★, SpaceX, LUNR★', tr:['RKLB','LUNR'], desc:'低成本发射依赖RKLB Electron/Neutron。'},
+  // Layer 6+
+  {id:'csp',      lbl:'超大规模云CSP',  layer:6, cat:'cloud',       co:'AWS, Azure, GCP, OCI', tr:[], desc:'四大云合计AI资本支出超$3000亿。'},
+  {id:'aicloud',  lbl:'AI算力云/GPU租用',layer:6, cat:'cloud',      co:'CoreWeave, Lambda Labs', tr:[], desc:'专注GPU算力租赁的新兴云服务商。'},
+  {id:'edge',     lbl:'边缘计算/CDN',   layer:6, cat:'cloud',       co:'Cloudflare, Fastly', tr:[], desc:'AI推理向边缘下沉降低延迟。'},
+  {id:'llm',      lbl:'基础大模型',     layer:7, cat:'ai_model',    co:'OpenAI, Anthropic, Gemini', tr:[], desc:'消耗最多GPU算力的大模型。'},
+  {id:'aiplatform',lbl:'AI开发平台/CUDA',layer:7, cat:'ai_model',   co:'NVIDIA CUDA, ROCm', tr:[], desc:'CUDA软件护城河锁定开发者。'},
+  {id:'ent_ai',   lbl:'企业AI软件',     layer:8, cat:'ai_app',      co:'PLTR, ServiceNow', tr:[], desc:'AI在企业场景落地。'},
+  {id:'auto',     lbl:'自动驾驶/FSD',   layer:8, cat:'ai_app',      co:'TSLA★, Waymo', tr:['TSLA'], desc:'端到端AI推理最复杂的实时应用。'},
+];
+
+const FEDGES = [
+  ['wafer','litho'],['wafer','etch'],['wafer','foundry'],
+  ['gas','etch'],['gas','litho'],['resist','litho'],['target','etch'],['fiberraw','optchip'],
+  ['litho','foundry'],['etch','foundry'],['etch','hbm'],['inspect','foundry'],['testeq','osat'],['mocvd','optchip'],
+  ['gpu','foundry'],['gpu','advpkg'],['asic','foundry'],['netchip','foundry'],['cpu','foundry'],
+  ['foundry','hbm'],['foundry','dram'],['foundry','nand'],['foundry','optchip'],
+  ['advpkg','hbm'],['osat','optmod'],['substrate','foundry'],['substrate','advpkg'],
+  ['hbm','aiserver'],['dram','aiserver'],['nand','dcops'],['memctrl','aiserver'],
+  ['optchip','optmod'],['optmod','switch'],['switch','aiserver'],['intercon','aiserver'],['gpu','intercon'],
+  ['gpu','aiserver'],['asic','aiserver'],['cpu','aiserver'],
+  ['nuclear','dcbuild'],['fuelcell','dcbuild'],['grid','dcbuild'],['batt','dcops'],
+  ['aiserver','dcbuild'],['cooling','dcbuild'],['ups','dcbuild'],
+  ['launch','satellite'],
+  ['dcbuild','csp'],['dcops','csp'],['satellite','edge'],
+  ['csp','aicloud'],['csp','llm'],['aicloud','llm'],['gpu','aiplatform'],['edge','llm'],
+  ['llm','ent_ai'],['llm','auto'],
+  ['aiplatform','ent_ai'],['edge','auto'],
+];
+
+let cyFusion;
+window.cyFusionReady = false;
+
+function initFusionGraph() {
+  const layerGroups = {};
+  FNODES.forEach(n => { if(!layerGroups[n.layer]) layerGroups[n.layer]=[]; layerGroups[n.layer].push(n.id); });
+  const XG=165, YG=60, CH=580, XS=80;
+  const POS = {};
+  Object.entries(layerGroups).forEach(([layer, ids]) => {
+    const x = parseInt(layer)*XG + XS;
+    const totalH = (ids.length-1)*YG;
+    const startY = (CH - totalH)/2;
+    ids.forEach((id,i) => POS[id] = {x, y: startY + i*YG});
+  });
+
+  const elements = [];
+  FNODES.forEach(n => elements.push({
+    data:{id:n.id, lbl:n.lbl, cat:n.cat, co:n.co, tr:n.tr, desc:n.desc, hasT:n.tr.length>0},
+    position: POS[id]
+  }));
+  FEDGES.forEach(([s,t],i) => elements.push({data:{id:'fe'+i, source:s, target:t}}));
+
+  cyFusion = cytoscape({
+    container: document.getElementById('cy-fusion'),
+    elements,
+    style:[
+      { selector:'node', style:{
+        'background-color': e => FCOLORS[e.data('cat')]||'#888',
+        'label':'data(lbl)', 'font-size':'8px', 'color':'#fff',
+        'text-valign':'center', 'text-halign':'center',
+        'width':82, 'height':32, 'shape':'round-rectangle',
+        'text-wrap':'wrap', 'text-max-width':74, 'font-weight':'600',
+      }},
+      { selector:'node[?hasT]', style:{
+        'border-width':2.5, 'border-color':'#FFD700', 'border-style':'solid',
+      }},
+      { selector:'edge', style:{
+        'width':1, 'line-color':'#ccc',
+        'target-arrow-color':'#ccc', 'target-arrow-shape':'triangle',
+        'curve-style':'bezier', 'arrow-scale':0.65, 'opacity':0.35,
+      }},
+      { selector:'node:selected', style:{'border-width':3,'border-color':'#fff'}},
+      { selector:'.hl-edge', style:{'line-color':'#FFD700','target-arrow-color':'#FFD700','opacity':1,'width':2}},
+      { selector:'.dimmed', style:{'opacity':0.12}},
+      { selector:'.wave-hl', style:{'border-width':4,'border-style':'double','border-color':undefined}},
+    ],
+    layout:{name:'preset'},
+    userZoomingEnabled:true, userPanningEnabled:true,
+    minZoom:0.25, maxZoom:2.5, wheelSensitivity:0.3,
+  });
+
+  cyFusion.fit(undefined, 24);
+
+  // Tap node → show detail + find associated wave
+  cyFusion.on('tap','node', function(e){
+    const d = e.target.data();
+    cyFusion.elements().removeClass('hl-edge dimmed wave-hl').addClass('dimmed');
+    e.target.removeClass('dimmed');
+    e.target.connectedEdges().removeClass('dimmed').addClass('hl-edge');
+    e.target.connectedEdges().connectedNodes().removeClass('dimmed');
+
+    // Find which wave contains this node
+    let assocWave = null;
+    document.querySelectorAll('.fusion-wave-card').forEach(card => {
+      const nodes = (card.dataset.nodes || '').split(',');
+      if (nodes.includes(d.id)) {
+        assocWave = card;
+        card.style.boxShadow = `0 0 0 2px ${card.style.borderLeftColor}, 0 4px 12px rgba(0,0,0,.2)`;
+      } else {
+        card.style.boxShadow = '';
+      }
+    });
+
+    const color = FCOLORS[d.cat];
+    const trackedHtml = d.tr.length
+      ? `<div class="mt-2 p-2 rounded" style="background:#fffbea;border:1px solid #e6b800;font-size:.78rem;">
+           <span style="color:#856404">⭐ 追踪标的：</span><strong>${d.tr.join(' / ')}</strong>
+         </div>` : '';
+    const neighbors = [...new Set([
+      ...e.target.incomers('node').map(n=>n.data('lbl')),
+      ...e.target.outgoers('node').map(n=>n.data('lbl'))
+    ])];
+    const nbHtml = neighbors.length
+      ? `<div class="mt-2"><div class="fw-semibold mb-1" style="font-size:.78rem;color:#555;">相连环节</div>${neighbors.map(l=>`<span class="nb-chip">${l}</span>`).join('')}</div>` : '';
+
+    let waveInfo = '';
+    if (assocWave) {
+      waveInfo = `<div class="mt-2 p-2 rounded" style="background:${color}10;border:1px solid ${color}30;font-size:.76rem;">
+        <span style="color:${color};font-weight:600;">↔ 关联波次：</span>${assocWave.querySelector('.fw-bold').textContent.trim()} ${assocWave.querySelector('span:nth-child(2)').textContent}
+      </div>`;
+    }
+
+    document.getElementById('fusion-detail').innerHTML = `
+      <div class="fw-bold mb-1" style="font-size:.9rem;">${d.lbl}</div>
+      <span class="badge mb-2" style="background:${color}20;color:${color};border:1px solid ${color}50;font-weight:600;font-size:.72rem;">${FCAT_LBL[d.cat]}</span>
+      <div class="mb-2" style="line-height:1.65;color:#444;font-size:.8rem;">${d.desc}</div>
+      <div style="font-size:.78rem;color:#656d76;"><strong style="display:block;color:#444;margin-bottom:2px;">主要公司</strong>${d.co}</div>
+      ${trackedHtml}${nbHtml}${waveInfo}`;
+  });
+
+  cyFusion.on('tap', e => {
+    if(e.target === cyFusion){
+      cyFusion.elements().removeClass('hl-edge dimmed wave-hl');
+      document.getElementById('fusion-detail').innerHTML = '<div class="text-muted text-center" style="margin-top:60px;line-height:2;font-size:.8rem;">点击左侧图谱节点<br>查看该环节详情与关联波次</div>';
+      document.querySelectorAll('.fusion-wave-card').forEach(c => c.style.boxShadow = '');
+    }
+  });
+
+  window.cyFusionReady = true;
+}
+
+// Highlight supply chain nodes from wave hover
+function highlightScNodes(nodeIdsStr, color) {
+  if (!cyFusion) return;
+  const ids = nodeIdsStr.split(',').filter(Boolean);
+  cyFusion.nodes().forEach(n => {
+    if (ids.includes(n.data('id'))) {
+      n.addClass('wave-hl');
+      n.style('border-color', color);
+      n.style('line-color', color);
+    }
+  });
+}
+
+function resetScHighlight() {
+  if (!cyFusion) return;
+  cyFusion.nodes().removeClass('wave-hl');
+}
+</script>
+{% endblock %}

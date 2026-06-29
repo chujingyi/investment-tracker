@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}添加催化剂{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <h5 class="fw-bold mb-0">添加催化剂</h5>
+  <a href="{{ url_for('catalysts') }}" class="btn btn-outline-secondary btn-sm">
+    <i class="bi bi-arrow-left me-1"></i>返回
+  </a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="post">
+      <div class="row g-3">
+        <div class="col-md-8">
+          <label class="form-label fw-semibold">标题 <span class="text-danger">*</span></label>
+          <input type="text" name="title" class="form-control" required
+                 placeholder="如：NVDA Q2财报、AAPL除息、COHR拆股">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">事件类型</label>
+          <select name="event_type" id="eventType" class="form-select" onchange="toggleTypeFields()">
+            {% for k, v in catalyst_types.items() %}
+            <option value="{{ k }}" {{ 'selected' if k == 'earnings' }}>{{ v }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">事件日期 <span class="text-danger">*</span></label>
+          <input type="date" name="event_date" class="form-control" required value="{{ today }}">
+        </div>
+        <div class="col-md-8">
+          <label class="form-label fw-semibold">关联股票</label>
+          <input type="text" name="tickers" class="form-control"
+                 placeholder="逗号分隔，如 NVDA,COHR,LITE">
+          <div class="form-text">事件会影响哪些股票，用英文逗号分隔</div>
+        </div>
+
+        {# ── Type-specific fields ── #}
+        <div class="col-12" id="fields-dividend" style="display:none;">
+          <div class="card border-primary" style="background:var(--card-bg);">
+            <div class="card-body py-2">
+              <div class="fw-semibold mb-2" style="font-size:.82rem; color:#0a5c32;">
+                <i class="bi bi-cash-stack me-1"></i>除权除息信息
+              </div>
+              <div class="row g-2">
+                <div class="col-md-4">
+                  <label class="form-label-sm">除息日</label>
+                  <input type="date" name="ex_div_date" class="form-control form-control-sm">
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label-sm">派息日</label>
+                  <input type="date" name="pay_date" class="form-control form-control-sm">
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label-sm">每股金额 ($)</label>
+                  <input type="text" name="div_amount" class="form-control form-control-sm" placeholder="0.66">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-12" id="fields-ipo" style="display:none;">
+          <div class="card" style="border-color:#3b82f6; background:var(--card-bg);">
+            <div class="card-body py-2">
+              <div class="fw-semibold mb-2" style="font-size:.82rem; color:#1a4778;">
+                <i class="bi bi-rocket-takeoff me-1"></i>IPO / 新股信息
+              </div>
+              <div class="row g-2">
+                <div class="col-md-4">
+                  <label class="form-label-sm">招股窗口开始</label>
+                  <input type="date" name="book_start" class="form-control form-control-sm">
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label-sm">上市日</label>
+                  <input type="date" name="list_date" class="form-control form-control-sm">
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label-sm">价格区间</label>
+                  <input type="text" name="price_range" class="form-control form-control-sm" placeholder="$44 - $50">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-12" id="fields-split" style="display:none;">
+          <div class="card" style="border-color:#f59e0b; background:var(--card-bg);">
+            <div class="card-body py-2">
+              <div class="fw-semibold mb-2" style="font-size:.82rem; color:#856404;">
+                <i class="bi bi-arrow-down-up me-1"></i>拆股 / 合股信息
+              </div>
+              <div class="row g-2">
+                <div class="col-md-6">
+                  <label class="form-label-sm">拆合比例</label>
+                  <select name="split_ratio" class="form-select form-select-sm">
+                    <option value="">选择...</option>
+                    <option value="2-for-1">2 拆 1 (2:1)</option>
+                    <option value="3-for-1">3 拆 1 (3:1)</option>
+                    <option value="3-for-2">3 拆 2 (3:2)</option>
+                    <option value="4-for-1">4 拆 1 (4:1)</option>
+                    <option value="reverse-1-for-10">合股 10:1</option>
+                    <option value="reverse-1-for-5">合股 5:1</option>
+                    <option value="custom">自定义</option>
+                  </select>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label-sm">除权日</label>
+                  <input type="date" name="split_ex_date" class="form-control form-control-sm">
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-12" id="fields-closed" style="display:none;">
+          <div class="card" style="border-color:#ef4444; background:var(--card-bg);">
+            <div class="card-body py-2">
+              <div class="fw-semibold mb-2" style="font-size:.82rem; color:#842029;">
+                <i class="bi bi-calendar-x me-1"></i>休市信息
+              </div>
+              <div class="row g-2">
+                <div class="col-md-12">
+                  <label class="form-label-sm">休市原因</label>
+                  <select name="close_reason" class="form-select form-select-sm">
+                    <option value="">选择...</option>
+                    <option value="holiday">节假日（独立日/圣诞节等）</option>
+                    <option value="funeral">国葬/全国哀悼日</option>
+                    <option value="weather">极端天气</option>
+                    <option value="other">其他原因</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-12">
+          <label class="form-label fw-semibold">描述</label>
+          <textarea name="description" class="form-control" rows="3"
+                    placeholder="事件详情、预期影响、关注要点..."></textarea>
+        </div>
+        <div class="col-12">
+          <button type="submit" class="btn btn-success">
+            <i class="bi bi-plus-circle me-1"></i>添加
+          </button>
+          <a href="{{ url_for('catalysts') }}" class="btn btn-outline-secondary ms-2">取消</a>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TYPE_FIELDS = ['dividend','ipo','split','closed'];
+function toggleTypeFields() {
+  const t = document.getElementById('eventType').value;
+  TYPE_FIELDS.forEach(f => {
+    const el = document.getElementById('fields-' + f);
+    if (el) el.style.display = (f === t) ? '' : 'none';
+  });
+}
+// Init on load
+toggleTypeFields();
+</script>
+{% endblock %}

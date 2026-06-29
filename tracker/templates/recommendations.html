@@ -26,9 +26,9 @@
     <select name="status" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
       <option value="">全部状态</option>
       <option value="active"  {{ 'selected' if selected_status == 'active' }}>追踪中</option>
-      <option value="stopped" {{ 'selected' if selected_status == 'stopped' }}>已停止</option>
       <option value="profit"  {{ 'selected' if selected_status == 'profit' }}>已止盈</option>
       <option value="loss"    {{ 'selected' if selected_status == 'loss' }}>已止损</option>
+      <option value="closed"  {{ 'selected' if selected_status == 'closed' }}>已关闭</option>
     </select>
     <select name="bought" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
       <option value="">全部买入</option>
@@ -41,7 +41,13 @@
       <option value="paper" {{ 'selected' if selected_source == 'paper' }}>模拟</option>
       <option value="real"  {{ 'selected' if selected_source == 'real' }}>真实</option>
     </select>
-    {% if selected_fw or selected_status or selected_entry or selected_bought or selected_source %}
+    <select name="theme" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
+      <option value="">全部主题</option>
+      {% for t in themes %}
+      <option value="{{ t }}" {{ 'selected' if selected_theme == t }}>{{ t }}</option>
+      {% endfor %}
+    </select>
+    {% if selected_fw or selected_status or selected_entry or selected_bought or selected_source or selected_theme %}
     <a href="{{ url_for('recommendations') }}" class="btn btn-outline-secondary btn-sm">
       <i class="bi bi-x me-1"></i>清除
     </a>
@@ -58,6 +64,7 @@
         <tr>
           <th>日期</th>
           <th>股票</th>
+          <th>主题</th>
           <th>入场建议</th>
           <th>风险</th>
           <th>周期</th>
@@ -78,6 +85,13 @@
             {% if r.monitoring %}<span class="monitor-badge ms-1">🔔</span>{% endif %}
             {% if r.is_expired_validity %}<span class="expiry-past ms-1">效期已过</span>
             {% elif r.is_expiring_soon %}<span class="expiry-soon ms-1">即将到期</span>{% endif %}
+          </td>
+          <td>
+            {% if r.theme %}
+            {% for tag in r.theme.split(',') %}
+            <span class="theme-badge">{{ tag }}</span>
+            {% endfor %}
+            {% else %}<span class="text-muted" style="font-size:.75rem;">—</span>{% endif %}
           </td>
           <td>
             {% set el = r.entry_rec_label %}

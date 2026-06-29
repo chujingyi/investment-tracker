@@ -232,12 +232,8 @@
 {% block scripts %}
 {% if row.fw_stop_label %}
 <script>
-const FW_DEFAULTS = {
-  momentum:    { stop: 0.88, target: 1.25 },
-  fundamental: { stop: 0.85, target: 1.40 },
-  supply_chain:{ stop: 0.88, target: 1.25 },
-  radar:       { stop: 0.90, target: 1.20 },
-};
+// FW_DEFAULTS injected from backend (single source of truth)
+const FW_DEFAULTS = {{ fw_defaults_json | safe }};
 function updateTargets() {
   const entry = parseFloat(document.getElementById('entryPrice').value);
   const def = FW_DEFAULTS['{{ row.framework }}'];

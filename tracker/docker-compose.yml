@@ -1,0 +1,16 @@
+# Docker compose for stock tracker
+version: "3.8"
+services:
+  tracker:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - API_KEY=${API_KEY}
+      - FLASK_DEBUG=0
+    volumes:
+      - tracker-data:/app/data
+
+volumes:
+  tracker-data:

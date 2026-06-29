@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}{% if art %}编辑文章{% else %}新建文章{% endif %}{% endblock %}
+
+{% block content %}
+<div class="mb-4 d-flex justify-content-between align-items-center">
+  <div>
+    <h5 class="fw-bold mb-0">{% if art %}编辑文章{% else %}新建知识库文章{% endif %}</h5>
+    <div class="text-muted" style="font-size:.82rem;">支持 Markdown 格式</div>
+  </div>
+  <a href="{{ url_for('knowledge_detail', art_id=art.id) if art else url_for('knowledge') }}"
+     class="btn btn-outline-secondary btn-sm">取消</a>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-8">
+    <form method="post">
+      <div class="card mb-3">
+        <div class="card-body p-3 row g-3">
+          <div class="col-12">
+            <label class="form-label fw-semibold">标题 *</label>
+            <input type="text" name="title" class="form-control" required
+                   value="{{ art.title if art else '' }}" placeholder="例：存储行业全景拆解">
+          </div>
+          <div class="col-sm-4">
+            <label class="form-label">分类</label>
+            <select name="category" class="form-select">
+              {% for k, v in kb_categories.items() %}
+              <option value="{{ k }}" {{ 'selected' if art and art.category == k }}>{{ v }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-sm-8">
+            <label class="form-label">标签 <small class="text-muted">（逗号分隔）</small></label>
+            <input type="text" name="tags" class="form-control"
+                   value="{{ art.tags if art else '' }}"
+                   placeholder="存储,AI,半导体">
+          </div>
+          <div class="col-12">
+            <label class="form-label">摘要 <small class="text-muted">（一两句话，显示在列表卡片上）</small></label>
+            <input type="text" name="summary" class="form-control"
+                   value="{{ art.summary if art else '' }}"
+                   placeholder="这篇文章的核心结论/用途">
+          </div>
+        </div>
+      </div>
+
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <span><i class="bi bi-markdown me-1"></i>正文内容</span>
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-outline-secondary btn-sm" onclick="togglePreview()">
+              <i class="bi bi-eye me-1"></i><span id="previewBtnText">预览</span>
+            </button>
+          </div>
+        </div>
+        <div class="card-body p-0">
+          <textarea name="content" id="contentEditor" class="form-control border-0 rounded-0"
+                    rows="24" style="font-family:monospace; font-size:.85rem; resize:vertical;"
+                    placeholder="支持 Markdown：
+# 一级标题
+## 二级标题
+**加粗** / *斜体*
+- 列表项
+> 引用
+
+```
+代码块
+```">{{ art.content if art else '' }}</textarea>
+          <div id="previewPane" class="kb-markdown p-4 d-none" style="min-height:300px;"></div>
+        </div>
+      </div>
+
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-success">
+          <i class="bi bi-check-circle me-1"></i>{% if art %}保存修改{% else %}发布文章{% endif %}
+        </button>
+        <a href="{{ url_for('knowledge_detail', art_id=art.id) if art else url_for('knowledge') }}"
+           class="btn btn-outline-secondary">取消</a>
+      </div>
+    </form>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-lightbulb me-1"></i>Markdown 速查</div>
+      <div class="card-body p-3" style="font-size:.8rem; color:var(--text-muted); line-height:2;">
+        <code># 标题一</code><br>
+        <code>## 标题二</code><br>
+        <code>**粗体**</code> / <code>*斜体*</code><br>
+        <code>- 无序列表</code><br>
+        <code>1. 有序列表</code><br>
+        <code>&gt; 引用块</code><br>
+        <code>```代码块```</code><br>
+        <code>| 表头 | 表头 |</code><br>
+        <code>| --- | --- |</code><br>
+        <code>| 内容 | 内容 |</code>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
+<script>
+let previewing = false;
+function togglePreview() {
+  const editor = document.getElementById('contentEditor');
+  const pane   = document.getElementById('previewPane');
+  const btn    = document.getElementById('previewBtnText');
+  previewing = !previewing;
+  if (previewing) {
+    pane.innerHTML = marked.parse(editor.value || '*(暂无内容)*');
+    editor.classList.add('d-none');
+    pane.classList.remove('d-none');
+    btn.textContent = '编辑';
+  } else {
+    editor.classList.remove('d-none');
+    pane.classList.add('d-none');
+    btn.textContent = '预览';
+  }
+}
+</script>
+{% endblock %}

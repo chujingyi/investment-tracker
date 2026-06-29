@@ -46,37 +46,38 @@
 </div>
 
 {% if recs %}
-<!-- Summary row -->
+<!-- Summary row (using pre-grouped data from backend) -->
 <div class="row g-2 mb-3">
-  {% set immediate = recs | selectattr('entry_rec', 'equalto', 'immediate') | list %}
-  {% set wait = recs | selectattr('entry_rec', 'equalto', 'wait') | list %}
-  {% set watch = recs | selectattr('entry_rec', 'equalto', 'watch') | list %}
-  {% set avoid = recs | selectattr('entry_rec', 'equalto', 'avoid') | list %}
-  {% if immediate %}
+  {% if entry_counts.get('actionable') %}
   <div class="col-auto">
-    <span class="entry-badge entry-immediate">{{ immediate|length }} 立即可入</span>
+    <span class="entry-badge entry-actionable">{{ entry_counts['actionable'] }} 可入</span>
   </div>
   {% endif %}
-  {% if wait %}
+  {% if entry_counts.get('immediate') %}
   <div class="col-auto">
-    <span class="entry-badge entry-wait">{{ wait|length }} 等回落</span>
+    <span class="entry-badge entry-immediate">{{ entry_counts['immediate'] }} 立即可入</span>
   </div>
   {% endif %}
-  {% if watch %}
+  {% if entry_counts.get('wait') %}
   <div class="col-auto">
-    <span class="entry-badge entry-watch">{{ watch|length }} 仅观察</span>
+    <span class="entry-badge entry-wait">{{ entry_counts['wait'] }} 等回落</span>
   </div>
   {% endif %}
-  {% if avoid %}
+  {% if entry_counts.get('watch') %}
   <div class="col-auto">
-    <span class="entry-badge entry-avoid">{{ avoid|length }} 不碰</span>
+    <span class="entry-badge entry-watch">{{ entry_counts['watch'] }} 仅观察</span>
+  </div>
+  {% endif %}
+  {% if entry_counts.get('avoid') %}
+  <div class="col-auto">
+    <span class="entry-badge entry-avoid">{{ entry_counts['avoid'] }} 不碰</span>
   </div>
   {% endif %}
 </div>
 
-<!-- Recs grouped by entry_rec -->
-{% for group_key, group_label in [('immediate','立即可入'), ('wait','等回落'), ('watch','仅观察'), ('avoid','不碰')] %}
-  {% set group_recs = recs | selectattr('entry_rec', 'equalto', group_key) | list %}
+<!-- Recs grouped by entry_rec (pre-grouped in backend) -->
+{% for group_key, group_label in [('actionable','可入'), ('immediate','立即可入'), ('wait','等回落'), ('watch','仅观察'), ('avoid','不碰')] %}
+  {% set group_recs = grouped_recs.get(group_key, []) %}
   {% if group_recs %}
   <div class="divider-label">{{ group_label }}</div>
   <div class="row g-3 mb-2">
@@ -90,6 +91,7 @@
                class="fw-bold text-decoration-none"
                style="font-size:1.2rem; color:var(--text);">{{ r.ticker }}</a>
             <small class="text-muted ms-1">{{ r.market }}</small>
+            {% if r.is_related %}<span class="related-badge ms-1">跨会话</span>{% endif %}
             {% if r.monitoring %}<span class="monitor-badge ms-1">🔔</span>{% endif %}
             {% if r.is_bought %}<span class="badge-real ms-1">已买</span>{% endif %}
           </div>
@@ -161,11 +163,12 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script>
   const el = document.getElementById('markdownContent');
   if (el && el.textContent.trim()) {
-    el.innerHTML = marked.parse(el.textContent);
+    el.innerHTML = DOMPurify.sanitize(marked.parse(el.textContent));
     el.classList.add('markdown-body');
   }
 </script>

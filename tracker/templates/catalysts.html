@@ -1,0 +1,593 @@
+{% extends "base.html" %}
+{% block title %}催化剂{% endblock %}
+
+{% macro cat_card(r, show_quick) %}
+<div class="cat-card mb-2" id="cat-{{ r.id }}">
+  <div class="d-flex justify-content-between align-items-start">
+    <div class="flex-grow-1 me-2">
+      <div class="d-flex align-items-center gap-2 mb-1 flex-wrap">
+        <span class="cat-type-badge type-{{ r.event_type }}">{{ r.type_label }}</span>
+        <span class="fw-semibold" style="font-size:.92rem;">{{ r.title }}</span>
+        {% if r.days_until == 0 %}
+        <span class="cat-days-chip chip-today">今天</span>
+        {% elif r.days_until == 1 %}
+        <span class="cat-days-chip chip-soon">明天</span>
+        {% elif r.days_until is not none and r.days_until < 0 %}
+        <span class="cat-days-chip chip-past">{{ -r.days_until }}天前</span>
+        {% elif r.days_until is not none and r.days_until <= 7 %}
+        <span class="cat-days-chip chip-soon">{{ r.days_until }}天后</span>
+        {% elif r.days_until is not none %}
+        <span class="cat-days-chip chip-later">{{ r.days_until }}天后</span>
+        {% endif %}
+      </div>
+      <div class="text-muted mb-1" style="font-size:.78rem;">
+        <i class="bi bi-calendar3 me-1"></i>{{ r.event_date }}
+        {% if r.description %} · {{ r.description[:60] }}{% if r.description|length > 60 %}…{% endif %}{% endif %}
+      </div>
+      {% if r.tickers %}
+      <div class="d-flex flex-wrap gap-2">
+        {% for t in r.tickers %}
+        <span class="cat-ticker-chip">
+          <span class="ticker-sym">{{ t.ticker }}</span>
+          {% if t.latest_price %}
+          <span class="ms-1" style="font-size:.75rem; color:var(--text-muted);">${{ "%.2f"|format(t.latest_price) }}</span>
+          {% if t.pct_from_entry is not none %}
+          <span class="ms-1 {{ 'text-success' if t.pct_from_entry > 0 else 'text-danger' }}" style="font-size:.75rem;">
+            {{ "%+.1f"|format(t.pct_from_entry) }}%
+          </span>
+          {% endif %}
+          {% endif %}
+        </span>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+    <div class="d-flex flex-column gap-1 align-items-end" style="min-width:100px;">
+      <a href="{{ url_for('catalyst_detail', cat_id=r.id) }}" class="btn btn-sm btn-outline-secondary">详情</a>
+      {% if show_quick %}
+      <button class="btn btn-sm btn-outline-success" onclick="quickHappened({{ r.id }}, this)">
+        <i class="bi bi-check2-circle me-1"></i>已发生
+      </button>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endmacro %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h5 class="fw-bold mb-0">催化剂</h5>
+    <div class="text-muted" style="font-size:.82rem;">事件驱动 · 催化剂 + 放量 = 进场信号</div>
+  </div>
+  <div class="d-flex gap-2">
+    <button id="syncBtn" class="btn btn-outline-secondary btn-sm" onclick="syncEarnings()">
+      <i class="bi bi-cloud-download me-1"></i>同步财报
+    </button>
+    <a href="{{ url_for('catalyst_add') }}" class="btn btn-success btn-sm">
+      <i class="bi bi-plus-circle me-1"></i>添加
+    </a>
+  </div>
+</div>
+
+{# ── 日历 ── #}
+<div class="cal-wrapper mb-4">
+  <div class="d-flex align-items-center justify-content-between mb-2">
+    <div class="fw-semibold" style="font-size:.88rem;">
+      事件日历
+      <span id="calLoadingBadge" class="ms-2" style="font-size:.72rem; color:var(--text-muted); display:none;">
+        <span class="spinner-border spinner-border-sm" style="width:.65rem; height:.65rem;"></span> 加载市场数据…
+      </span>
+    </div>
+    <div class="d-flex align-items-center gap-2 flex-wrap" style="font-size:.73rem; color:var(--text-muted);">
+      <span><span class="cal-dot dot-earnings"></span> 财报</span>
+      <span><span class="cal-dot dot-macro"></span> 宏观</span>
+      <span><span class="cal-dot dot-dividend"></span> 派息</span>
+      <span><span class="cal-dot dot-ipo"></span> IPO/拆股</span>
+      <span><span class="cal-dot dot-closed" style="border-radius:2px; width:10px; height:6px;"></span> 休市</span>
+      <button class="btn btn-link btn-sm p-0 ms-1" style="font-size:.78rem;" onclick="shiftMonth(-1)">‹</button>
+      <button class="btn btn-link btn-sm p-0"       style="font-size:.78rem;" onclick="shiftMonth(1)">›</button>
+    </div>
+  </div>
+  <div id="calGrid" class="cal-grid"></div>
+  <div id="calTooltip" class="cal-tooltip" style="display:none;"></div>
+</div>
+
+{# ── 统计 chips ── #}
+<div class="d-flex flex-wrap gap-2 mb-4">
+  {% if needs_review %}
+  <span class="cat-chip chip-review"><i class="bi bi-exclamation-circle me-1"></i>待评估 {{ needs_review|length }}</span>
+  {% endif %}
+  {% if overdue %}
+  <span class="cat-chip chip-overdue"><i class="bi bi-alarm me-1"></i>已过期未标记 {{ overdue|length }}</span>
+  {% endif %}
+  <span class="cat-chip chip-week"><i class="bi bi-calendar-week me-1"></i>本周 {{ this_week|length }}</span>
+  <span class="cat-chip chip-month"><i class="bi bi-calendar-month me-1"></i>本月 {{ this_month|length }}</span>
+  <span class="cat-chip chip-later"><i class="bi bi-calendar3 me-1"></i>更远 {{ later|length }}</span>
+  {% if macro_events %}
+  <span class="cat-chip chip-macro"><i class="bi bi-globe2 me-1"></i>宏观事件 {{ macro_events|length }}</span>
+  {% endif %}
+</div>
+
+{# ── 待评估 ── #}
+{% if needs_review %}
+<div class="mb-4">
+  <div class="cat-section-label label-review">
+    <i class="bi bi-exclamation-circle-fill me-1"></i>待评估（已发生，请填写影响）
+  </div>
+  {% for r in needs_review %}
+  <div class="cat-card card-review mb-2">
+    <div class="d-flex justify-content-between align-items-start">
+      <div class="flex-grow-1">
+        <div class="d-flex align-items-center gap-2 mb-1 flex-wrap">
+          <span class="cat-type-badge type-{{ r.event_type }}">{{ r.type_label }}</span>
+          <span class="fw-semibold" style="font-size:.92rem;">{{ r.title }}</span>
+          <span class="cat-days-chip chip-past">{{ -r.days_until }} 天前</span>
+        </div>
+        {% if r.tickers %}
+        <div class="d-flex flex-wrap gap-2 mb-1">
+          {% for t in r.tickers %}
+          <span class="cat-ticker-chip">
+            {{ t.ticker }}
+            {% if t.price_before and t.price_after %}
+            <span class="ms-1 text-muted" style="font-size:.75rem;">{{ "%.2f"|format(t.price_before) }} → {{ "%.2f"|format(t.price_after) }}</span>
+            {% if t.pct_change %}
+            <span class="ms-1 {{ 'text-success' if t.pct_change > 0 else 'text-danger' }}" style="font-size:.75rem;">{{ "%+.1f"|format(t.pct_change) }}%</span>
+            {% endif %}
+            {% elif t.latest_price %}
+            <span class="ms-1 text-muted" style="font-size:.75rem;">${{ "%.2f"|format(t.latest_price) }}</span>
+            {% endif %}
+          </span>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      <a href="{{ url_for('catalyst_detail', cat_id=r.id) }}" class="btn btn-sm btn-warning ms-2">
+        <i class="bi bi-pencil me-1"></i>填写评分
+      </a>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# ── 已过期 ── #}
+{% if overdue %}
+<div class="mb-4">
+  <div class="cat-section-label label-overdue"><i class="bi bi-alarm me-1"></i>已过期 · 需更新状态</div>
+  {% for r in overdue %}{{ cat_card(r, True) }}{% endfor %}
+</div>
+{% endif %}
+
+{# ── 本周 ── #}
+{% if this_week %}
+<div class="mb-4">
+  <div class="cat-section-label label-week"><i class="bi bi-calendar-week me-1"></i>本周（{{ this_week|length }} 个）</div>
+  {% for r in this_week %}{{ cat_card(r, True) }}{% endfor %}
+</div>
+{% endif %}
+
+{# ── 本月 ── #}
+{% if this_month %}
+<div class="mb-4">
+  <div class="cat-section-label label-month"><i class="bi bi-calendar-month me-1"></i>本月（{{ this_month|length }} 个）</div>
+  {% for r in this_month %}{{ cat_card(r, False) }}{% endfor %}
+</div>
+{% endif %}
+
+{# ── 宏观事件 ── #}
+{% if macro_events %}
+<div class="mb-4" id="macro-section">
+  <div class="d-flex align-items-center justify-content-between mb-2">
+    <div class="cat-section-label label-macro" style="margin-bottom:0;">
+      <i class="bi bi-globe2 me-1"></i>宏观事件（{{ macro_events|length }} 个）
+    </div>
+    <a href="{{ url_for('monitor') }}" class="btn btn-sm btn-outline-secondary" style="font-size:.75rem;">
+      <i class="bi bi-gear me-1"></i>管理
+    </a>
+  </div>
+  {% for ev in macro_events %}
+  <div class="cat-card card-macro mb-2">
+    <div class="d-flex justify-content-between align-items-start mb-2">
+      <div>
+        <span class="cat-type-badge type-macro me-2">宏观</span>
+        <span class="fw-semibold" style="font-size:.92rem;">{{ ev.title }}</span>
+      </div>
+    </div>
+    {% if ev.thesis %}
+    <div class="mb-2" style="font-size:.82rem; color:var(--text-muted);">
+      <i class="bi bi-lightbulb me-1" style="color:var(--yellow);"></i>{{ ev.thesis }}
+    </div>
+    {% endif %}
+    {% if ev.tickers_list %}
+    <div class="d-flex flex-wrap gap-1 mb-2">
+      {% for t in ev.tickers_list %}
+      <span class="cat-ticker-chip"><span class="ticker-sym">{{ t }}</span></span>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if ev.dates_parsed %}
+    <div class="macro-dates-list">
+      {% for rd in ev.dates_parsed %}
+      <div class="macro-date-row {{ 'macro-due' if rd.is_due else ('macro-past' if rd.is_past else '') }}" id="macro-{{ ev.id }}-{{ rd.date }}">
+        {% if rd.is_due %}
+        <i class="bi bi-alarm-fill me-1" style="color:#fd7e14;"></i>
+        {% elif rd.is_past %}
+        <i class="bi bi-check-circle me-1" style="color:var(--text-muted);"></i>
+        {% else %}
+        <i class="bi bi-calendar3 me-1" style="color:var(--text-muted);"></i>
+        {% endif %}
+        <span class="macro-date-label">{{ rd.date }}</span>
+        <span class="macro-date-text">{{ rd.label }}</span>
+        {% if rd.is_due %}
+        <span class="badge-macro-due ms-auto">⚡ 即将到达</span>
+        {% elif rd.is_past %}
+        <span class="badge-macro-past ms-auto">已过</span>
+        {% else %}
+        <span class="badge-macro-left ms-auto">{{ rd.days_left }}天</span>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# ── 更远 ── #}
+{% if later %}
+<div class="mb-4">
+  <div class="cat-section-label label-later"><i class="bi bi-calendar3 me-1"></i>更远（{{ later|length }} 个）</div>
+  {% for r in later %}{{ cat_card(r, False) }}{% endfor %}
+</div>
+{% endif %}
+
+{# ── 历史 ── #}
+{% if past %}
+<div class="mb-4">
+  <details>
+    <summary class="cat-section-label label-past" style="cursor:pointer; list-style:none; display:inline-flex; align-items:center; gap:.4rem;">
+      <i class="bi bi-clock-history"></i>历史记录（{{ past|length }} 个）<i class="bi bi-chevron-down" style="font-size:.7rem;"></i>
+    </summary>
+    <div class="mt-2">
+    {% for r in past %}
+    <div class="cat-card card-past mb-2">
+      <div class="d-flex justify-content-between align-items-center">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <span class="cat-type-badge type-{{ r.event_type }}">{{ r.type_label }}</span>
+          <span style="font-size:.88rem;">{{ r.title }}</span>
+          <span class="text-muted" style="font-size:.78rem;">{{ r.event_date }}</span>
+          {% if r.status == 'happened' %}
+          <span class="badge-happened">已发生</span>
+          {% if r.impact_score %}
+          <span style="font-size:.72rem; color:var(--yellow);">{% for i in range(r.impact_score) %}<i class="bi bi-star-fill"></i>{% endfor %}</span>
+          {% endif %}
+          {% else %}
+          <span class="badge-skipped">已跳过</span>
+          {% endif %}
+        </div>
+        <a href="{{ url_for('catalyst_detail', cat_id=r.id) }}" class="btn btn-sm btn-outline-secondary"><i class="bi bi-box-arrow-up-right"></i></a>
+      </div>
+      {% if r.impact_notes %}
+      <div class="mt-1" style="font-size:.78rem; color:var(--text-muted);"><i class="bi bi-chat-left-text me-1"></i>{{ r.impact_notes }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+    </div>
+  </details>
+</div>
+{% endif %}
+
+{% if not needs_review and not overdue and not this_week and not this_month and not later and not past and not macro_events %}
+<div class="card">
+  <div class="empty-state py-5">
+    <i class="bi bi-lightning d-block mb-2" style="font-size:2rem;opacity:.3;"></i>
+    <div style="font-size:.9rem;">还没有催化剂记录</div>
+    <div class="text-muted mt-1" style="font-size:.82rem;">点"同步财报"自动导入，或手动添加</div>
+    <div class="d-flex gap-2 justify-content-center mt-3">
+      <button class="btn btn-outline-secondary btn-sm" onclick="syncEarnings()"><i class="bi bi-cloud-download me-1"></i>同步财报</button>
+      <a href="{{ url_for('catalyst_add') }}" class="btn btn-success btn-sm"><i class="bi bi-plus-circle me-1"></i>手动添加</a>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<style>
+/* ── chips ── */
+.cat-chip { display:inline-flex; align-items:center; padding:.25rem .7rem; border-radius:20px; font-size:.8rem; font-weight:500; }
+.chip-review  { background:#fff3cd; color:#856404; border:1px solid #ffc107; }
+.chip-overdue { background:#f8d7da; color:#842029; border:1px solid #f5c2c7; }
+.chip-week    { background:#d1ecf1; color:#0c5460; border:1px solid #bee5eb; }
+.chip-month   { background:#d4edda; color:#155724; border:1px solid #c3e6cb; }
+.chip-later   { background:#e2e3e5; color:#383d41; border:1px solid #d6d8db; }
+.chip-macro   { background:#e8dffa; color:#4a1a72; border:1px solid #c9b8f0; }
+
+/* ── section labels ── */
+.cat-section-label { font-size:.78rem; font-weight:600; letter-spacing:.04em; text-transform:uppercase; padding:.3rem .6rem; border-radius:4px; margin-bottom:.5rem; display:inline-block; }
+.label-review { background:#fff3cd; color:#856404; }
+.label-overdue{ background:#f8d7da; color:#842029; }
+.label-week   { background:#d1ecf1; color:#0c5460; }
+.label-month  { background:#d4edda; color:#155724; }
+.label-macro  { background:#e8dffa; color:#4a1a72; }
+.label-later  { background:#e2e3e5; color:#383d41; }
+.label-past   { background:var(--card-bg); color:var(--text-muted); border:1px solid var(--border); }
+
+/* ── cards ── */
+.cat-card { background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:.8rem 1rem; border-left:3px solid var(--border); }
+.cat-card:hover { border-left-color:var(--accent); }
+.card-review { border-left-color:#ffc107 !important; }
+.card-macro  { border-left-color:#9b59b6 !important; }
+.card-past   { opacity:.72; }
+
+/* ── type badges ── */
+.cat-type-badge { font-size:.7rem; font-weight:600; padding:.15rem .45rem; border-radius:4px; text-transform:uppercase; letter-spacing:.03em; }
+.type-earnings { background:#cff4fc; color:#055160; }
+.type-policy   { background:#d8d9f5; color:#3b3f8c; }
+.type-product  { background:#d1f5e0; color:#0a4b2d; }
+.type-contract { background:#fde8d8; color:#7a3010; }
+.type-macro    { background:#e8dffa; color:#4a1a72; }
+.type-fed      { background:#f9e4c8; color:#7b4307; }
+.type-other    { background:#e2e3e5; color:#383d41; }
+
+/* ── day chips ── */
+.cat-days-chip { font-size:.72rem; font-weight:600; padding:.12rem .45rem; border-radius:12px; }
+.chip-today { background:#dc3545; color:#fff; }
+.chip-soon  { background:#fd7e14; color:#fff; }
+.chip-later { background:#6c757d; color:#fff; }
+.chip-past  { background:#adb5bd; color:#fff; }
+
+/* ── ticker chips ── */
+.cat-ticker-chip { display:inline-flex; align-items:center; padding:.2rem .5rem; border-radius:6px; background:var(--hover); font-size:.8rem; }
+.ticker-sym { font-weight:700; font-size:.82rem; }
+
+/* ── history badges ── */
+.badge-happened { background:#d1f5e0; color:#0a4b2d; font-size:.7rem; padding:.1rem .35rem; border-radius:4px; }
+.badge-skipped  { background:#e2e3e5; color:#383d41; font-size:.7rem; padding:.1rem .35rem; border-radius:4px; }
+
+/* ── macro dates ── */
+.macro-dates-list { display:flex; flex-direction:column; gap:.3rem; }
+.macro-date-row { display:flex; align-items:center; gap:.5rem; font-size:.82rem; padding:.35rem .5rem; border-radius:6px; background:var(--hover); }
+.macro-date-row.macro-due  { background:#fff3cd; }
+.macro-date-row.macro-past { opacity:.6; }
+.macro-date-label { font-weight:600; font-size:.78rem; min-width:85px; color:var(--text-muted); }
+.macro-date-text  { flex:1; }
+.badge-macro-due  { font-size:.7rem; background:#fd7e14; color:#fff; padding:.1rem .35rem; border-radius:4px; }
+.badge-macro-past { font-size:.7rem; background:#adb5bd; color:#fff; padding:.1rem .35rem; border-radius:4px; }
+.badge-macro-left { font-size:.72rem; color:var(--text-muted); font-weight:600; }
+
+/* ── calendar ── */
+.cal-wrapper { background:var(--card-bg); border:1px solid var(--border); border-radius:10px; padding:1rem 1.2rem; }
+.cal-grid { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; }
+@media(max-width:700px) { .cal-grid { grid-template-columns:1fr; } }
+.cal-month { }
+.cal-month-title { text-align:center; font-weight:600; font-size:.88rem; margin-bottom:.5rem; }
+.cal-days-header { display:grid; grid-template-columns:repeat(7,1fr); text-align:center; font-size:.68rem; color:var(--text-muted); margin-bottom:.25rem; }
+.cal-days { display:grid; grid-template-columns:repeat(7,1fr); gap:2px; }
+.cal-day { aspect-ratio:1; display:flex; flex-direction:column; align-items:center; justify-content:start; padding:.15rem; border-radius:5px; cursor:default; font-size:.72rem; }
+.cal-day.today { background:var(--accent); color:#fff; font-weight:700; }
+.cal-day.has-event { cursor:pointer; }
+.cal-day.has-event:not(.today) { background:var(--hover); }
+.cal-day.has-event:hover:not(.today) { background:var(--border); }
+.cal-day.empty { opacity:0; pointer-events:none; }
+.cal-day-num { line-height:1.2; }
+.cal-dots { display:flex; gap:2px; flex-wrap:wrap; justify-content:center; margin-top:1px; }
+.cal-dot { width:5px; height:5px; border-radius:50%; flex-shrink:0; }
+.dot-earnings { background:#0891b2; }
+.dot-macro    { background:#9b59b6; }
+.dot-dividend { background:#16a34a; }
+.dot-ipo      { background:#ca8a04; }
+.dot-closed   { background:#cbd5e1; border-radius:2px; }
+.cal-day.closed-day { background: repeating-linear-gradient(135deg, transparent, transparent 3px, rgba(148,163,184,.15) 3px, rgba(148,163,184,.15) 4px); }
+.cal-day.closed-day .cal-day-num { color: var(--text-muted); }
+.cal-tooltip { position:fixed; z-index:9999; background:var(--card-bg); border:1px solid var(--border); border-radius:8px; padding:.6rem .9rem; box-shadow:0 4px 16px rgba(0,0,0,.15); font-size:.8rem; max-width:280px; pointer-events:none; }
+</style>
+
+<script>
+/* ── Calendar state ── */
+const CAL_CATALYST = {{ cal_catalyst | tojson }};
+const CAL_MACRO    = {{ macro_cal_events | tojson }};
+const TODAY_STR    = "{{ today }}";
+
+let calOffset  = 0;
+let marketData = { closed: {}, dividends: [], ipos: [], splits: [] };
+
+const DOT_COLORS = {
+  earnings: '#0891b2',
+  macro:    '#9b59b6',
+  dividend: '#16a34a',
+  ipo:      '#ca8a04',
+  split:    '#ca8a04',
+};
+
+/* Build event map from all sources */
+function buildEvMap() {
+  const evMap = {};
+  const add = (date, type, title) => {
+    if (!evMap[date]) evMap[date] = [];
+    evMap[date].push({ type, title });
+  };
+  CAL_CATALYST.forEach(e => add(e.date, 'earnings', e.title));
+  CAL_MACRO.forEach(e    => add(e.date, 'macro',    e.label));
+  marketData.dividends.forEach(e => add(e.date, 'dividend', `${e.ticker} ${e.amount}`));
+  marketData.ipos.forEach(e      => add(e.date, 'ipo',      `IPO: ${e.name || e.ticker}`));
+  marketData.splits.forEach(e    => add(e.date, 'split',    `${e.ticker} ${e.content}`));
+  return evMap;
+}
+
+function buildCalendar() {
+  const base   = new Date(TODAY_STR + 'T00:00:00');
+  const grid   = document.getElementById('calGrid');
+  const evMap  = buildEvMap();
+  const closed = marketData.closed;
+  grid.innerHTML = '';
+
+  const monthNames = ['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月'];
+
+  for (let m = 0; m < 2; m++) {
+    const d = new Date(base.getFullYear(), base.getMonth() + calOffset + m, 1);
+    const year = d.getFullYear(), month = d.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const firstDay    = d.getDay();
+
+    const col = document.createElement('div');
+    col.className = 'cal-month';
+    col.innerHTML = `<div class="cal-month-title">${year}年 ${monthNames[month]}</div>
+      <div class="cal-days-header"><span>日</span><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span></div>
+      <div class="cal-days" id="cal-days-${m}"></div>`;
+    grid.appendChild(col);
+
+    const daysEl = document.getElementById(`cal-days-${m}`);
+    for (let i = 0; i < firstDay; i++) {
+      const e = document.createElement('div'); e.className = 'cal-day empty'; daysEl.appendChild(e);
+    }
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const ds      = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+      const events  = evMap[ds]  || [];
+      const isClosed = !!closed[ds];
+      const isToday  = ds === TODAY_STR;
+      const isWeekend = (() => { const wd = new Date(ds + 'T12:00:00').getDay(); return wd === 0 || wd === 6; })();
+
+      const cell = document.createElement('div');
+      let cls = 'cal-day';
+      if (isToday)          cls += ' today';
+      if (isClosed)         cls += ' closed-day';
+      if (events.length)    cls += ' has-event';
+      cell.className = cls;
+
+      // Dots — deduplicated by type
+      const seen = new Set();
+      let dots = '';
+      if (isClosed) { dots += '<span class="cal-dot dot-closed" style="border-radius:2px; width:10px; height:5px;"></span>'; seen.add('closed'); }
+      events.forEach(ev => {
+        if (!seen.has(ev.type)) {
+          dots += `<span class="cal-dot dot-${ev.type}"></span>`;
+          seen.add(ev.type);
+        }
+      });
+
+      cell.innerHTML = `<span class="cal-day-num">${day}</span><div class="cal-dots">${dots}</div>`;
+
+      const allItems = [];
+      if (isClosed) allItems.push({ type: 'closed', title: closed[ds] });
+      allItems.push(...events);
+
+      if (allItems.length) {
+        cell.addEventListener('mouseenter', (e) => showTooltip(e, allItems, ds));
+        cell.addEventListener('mouseleave', hideTooltip);
+        if (events.length) cell.addEventListener('click', () => scrollToEvent(events[0], ds));
+      }
+      daysEl.appendChild(cell);
+    }
+  }
+}
+
+function showTooltip(e, items, dateStr) {
+  const tip = document.getElementById('calTooltip');
+  const colorMap = { earnings:'#0891b2', macro:'#9b59b6', dividend:'#16a34a', ipo:'#ca8a04', split:'#ca8a04', closed:'#94a3b8' };
+  tip.innerHTML = `<div style="font-size:.7rem; color:var(--text-muted); margin-bottom:.3rem;">${dateStr}</div>` +
+    items.map(it => `<div style="margin:.15rem 0; display:flex; align-items:center; gap:.4rem;">
+      <span style="flex-shrink:0; width:7px; height:7px; border-radius:50%; background:${colorMap[it.type]||'#aaa'};"></span>
+      <span>${it.title}</span>
+    </div>`).join('');
+  tip.style.display = 'block';
+  const vw = window.innerWidth, x = e.clientX, y = e.clientY;
+  tip.style.left = (x + 260 > vw ? x - 270 : x + 12) + 'px';
+  tip.style.top  = (y + 12) + 'px';
+}
+
+function hideTooltip() {
+  document.getElementById('calTooltip').style.display = 'none';
+}
+
+function scrollToEvent(ev, dateStr) {
+  hideTooltip();
+  for (const el of document.querySelectorAll('.cat-card[id^="cat-"]')) {
+    if (el.textContent.includes(dateStr)) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.style.outline = '2px solid var(--accent)';
+      setTimeout(() => el.style.outline = '', 1500);
+      return;
+    }
+  }
+  for (const row of document.querySelectorAll('.macro-date-row')) {
+    if (row.querySelector('.macro-date-label')?.textContent.trim() === dateStr) {
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      row.style.outline = '2px solid #9b59b6';
+      setTimeout(() => row.style.outline = '', 1500);
+      return;
+    }
+  }
+}
+
+function shiftMonth(delta) {
+  calOffset += delta;
+  buildCalendar();
+}
+
+/* Load market calendar async after initial render */
+function loadMarketCalendar() {
+  document.getElementById('calLoadingBadge').style.display = 'inline';
+  fetch('/api/market_calendar')
+    .then(r => r.json())
+    .then(data => {
+      marketData = data;
+      buildCalendar();
+    })
+    .catch(() => {})
+    .finally(() => {
+      document.getElementById('calLoadingBadge').style.display = 'none';
+    });
+}
+
+/* ── Sync earnings ── */
+function syncEarnings() {
+  const btn = document.getElementById('syncBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>同步中...';
+  fetch('/api/sync_earnings', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.added > 0) {
+        btn.innerHTML = `<i class="bi bi-check me-1"></i>新增 ${data.added} 条`;
+        btn.classList.replace('btn-outline-secondary', 'btn-outline-success');
+        setTimeout(() => location.reload(), 800);
+      } else {
+        btn.innerHTML = '<i class="bi bi-check me-1"></i>已最新';
+        btn.disabled = false;
+        setTimeout(() => {
+          btn.innerHTML = '<i class="bi bi-cloud-download me-1"></i>同步财报';
+          btn.classList.replace('btn-outline-success', 'btn-outline-secondary');
+        }, 2000);
+      }
+    })
+    .catch(() => {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-cloud-download me-1"></i>同步财报';
+    });
+}
+
+/* ── Quick happened ── */
+function quickHappened(catId, btn) {
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  fetch(`/catalysts/${catId}/quick_happened`, { method: 'POST' })
+    .then(r => r.json())
+    .then(() => {
+      btn.innerHTML = '<i class="bi bi-check2-circle me-1"></i>已标记';
+      btn.classList.replace('btn-outline-success', 'btn-success');
+      setTimeout(() => location.reload(), 600);
+    })
+    .catch(() => {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-check2-circle me-1"></i>已发生';
+    });
+}
+
+buildCalendar();
+loadMarketCalendar();
+</script>
+{% endblock %}

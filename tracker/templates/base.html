@@ -38,6 +38,46 @@
             <i class="bi bi-list-ul me-1"></i>所有推荐
           </a>
         </li>
+        <li class="nav-item">
+          <a class="nav-link {% if request.endpoint == 'monitor' %}active fw-semibold{% endif %}"
+             href="{{ url_for('monitor') }}">
+            <i class="bi bi-bell me-1"></i>监控
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link {% if request.endpoint == 'supply_chain' %}active fw-semibold{% endif %}"
+             href="{{ url_for('supply_chain') }}">
+            <i class="bi bi-diagram-3 me-1"></i>供应链
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link {% if request.endpoint == 'rotation' %}active fw-semibold{% endif %}"
+             href="{{ url_for('rotation') }}">
+            <i class="bi bi-arrow-repeat me-1"></i>轮动雷达
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link {% if request.endpoint in ('knowledge','knowledge_detail','knowledge_add','knowledge_edit') %}active fw-semibold{% endif %}"
+             href="{{ url_for('knowledge') }}">
+            <i class="bi bi-journal-bookmark me-1"></i>知识库
+          </a>
+        </li>
+        <!-- Notification bell -->
+        <li class="nav-item position-relative">
+          <button class="btn btn-sm notif-bell-btn" id="notifBellBtn" title="通知" onclick="toggleNotifDropdown(event)">
+            <i class="bi bi-bell" style="font-size:1.05rem;"></i>
+            <span id="notifBadge" class="notif-badge" style="display:none">0</span>
+          </button>
+          <div id="notifDropdown" class="notif-dropdown" style="display:none;">
+            <div class="notif-header">
+              <span class="fw-semibold" style="font-size:.85rem;">通知</span>
+              <button class="btn btn-link btn-sm p-0 text-muted" style="font-size:.75rem;" onclick="markAllRead()">全部已读</button>
+            </div>
+            <div id="notifList" class="notif-list">
+              <div class="notif-empty">暂无通知</div>
+            </div>
+          </div>
+        </li>
         <li class="nav-item ms-1">
           <a class="btn btn-success btn-sm px-3 {% if request.endpoint == 'add_session' %}active{% endif %}"
              href="{{ url_for('add_session') }}">
@@ -65,6 +105,65 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+let _notifOpen = false;
+
+function toggleNotifDropdown(e) {
+  e.stopPropagation();
+  const dd = document.getElementById('notifDropdown');
+  _notifOpen = !_notifOpen;
+  dd.style.display = _notifOpen ? 'block' : 'none';
+  if (_notifOpen) loadNotifications();
+}
+
+document.addEventListener('click', () => {
+  if (_notifOpen) {
+    _notifOpen = false;
+    document.getElementById('notifDropdown').style.display = 'none';
+  }
+});
+
+function loadNotifications() {
+  fetch('/api/notifications')
+    .then(r => r.json())
+    .then(data => {
+      const list = document.getElementById('notifList');
+      if (!data.length) { list.innerHTML = '<div class="notif-empty">暂无通知</div>'; return; }
+      const unreadIds = data.filter(n => !n.is_read).map(n => n.id);
+      list.innerHTML = data.map(n => `
+        <div class="notif-item ${n.is_read ? '' : 'unread'}" data-id="${n.id}">
+          <div class="notif-title">${n.title}</div>
+          <div class="notif-msg">${n.message}</div>
+          <div class="notif-time">${n.created_at.slice(0,16)}</div>
+        </div>`).join('');
+      if (unreadIds.length) {
+        fetch('/api/notifications/mark_read', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ids: unreadIds})
+        }).then(() => updateBadge());
+      }
+    });
+}
+
+function markAllRead() {
+  fetch('/api/notifications/mark_read', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'})
+    .then(() => { updateBadge(); loadNotifications(); });
+}
+
+function updateBadge() {
+  fetch('/api/notifications/count')
+    .then(r => r.json())
+    .then(d => {
+      const badge = document.getElementById('notifBadge');
+      if (d.count > 0) { badge.textContent = d.count > 99 ? '99+' : d.count; badge.style.display = 'block'; }
+      else badge.style.display = 'none';
+    });
+}
+
+updateBadge();
+setInterval(updateBadge, 60000);
+</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

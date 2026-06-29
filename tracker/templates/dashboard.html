@@ -17,30 +17,40 @@
   </div>
 </div>
 
-<!-- Monitoring alerts -->
-{% if monitoring %}
+<!-- Monitoring alerts — show only triggered (到价) items, full list on /monitor -->
+{% set triggered = monitoring | selectattr('price_alert') | list %}
+{% if triggered %}
 <div class="mb-3">
-  {% for r in monitoring %}
-  <div class="{% if r.price_alert %}monitor-alert-pulse{% else %}monitor-alert{% endif %} d-flex justify-content-between align-items-center mb-2">
+  {% for r in triggered %}
+  <div class="monitor-alert-pulse d-flex justify-content-between align-items-center mb-2">
     <div>
-      <span class="monitor-badge me-2">🔔 监控中</span>
+      <span class="triggered-badge me-2">已到价</span>
       <strong>{{ r.ticker }}</strong>
-      <span class="text-muted ms-2" style="font-size:.82rem;">
-        等待回落到 <strong>${{ "%.2f"|format(r.wait_price) }}</strong>
+      <span class="ms-2" style="font-size:.82rem;">
+        目标 <strong>${{ "%.2f"|format(r.wait_price) }}</strong>
+        · 当前 <strong>${{ "%.2f"|format(r.latest_price) }}</strong>
+        （距目标 {{ "%.1f"|format((r.latest_price - r.wait_price) / r.wait_price * 100) }}%）
         {% if r.wait_condition %} — {{ r.wait_condition }}{% endif %}
       </span>
-      {% if r.latest_price %}
-      <span class="ms-2" style="font-size:.82rem;">
-        当前：<strong>${{ "%.2f"|format(r.latest_price) }}</strong>
-        {% if r.wait_price %}
-        （距目标 {{ "%.1f"|format((r.latest_price - r.wait_price) / r.wait_price * 100) }}%）
-        {% endif %}
-      </span>
-      {% endif %}
     </div>
-    <a href="{{ url_for('detail', rec_id=r.id) }}" class="btn btn-sm btn-outline-secondary">查看</a>
+    <a href="{{ url_for('monitor') }}" class="btn btn-sm btn-warning">监控页</a>
   </div>
   {% endfor %}
+  {% if monitoring | length > triggered | length %}
+  <div class="text-muted" style="font-size:.78rem; padding:.25rem .5rem;">
+    还有 {{ monitoring | length - triggered | length }} 个监控中，<a href="{{ url_for('monitor') }}">查看全部 →</a>
+  </div>
+  {% endif %}
+</div>
+{% elif monitoring %}
+<div class="mb-3">
+  <div class="monitor-alert d-flex justify-content-between align-items-center">
+    <div>
+      <span class="monitor-badge me-2">监控中</span>
+      <span style="font-size:.82rem;">{{ monitoring | length }} 个监控目标运行中，暂未到价</span>
+    </div>
+    <a href="{{ url_for('monitor') }}" class="btn btn-sm btn-outline-secondary">监控页</a>
+  </div>
 </div>
 {% endif %}
 
@@ -108,6 +118,22 @@
     </div>
   </div>
 </div>
+
+<!-- Theme distribution -->
+{% if theme_stats %}
+<div class="mb-4">
+  <span class="fw-semibold" style="font-size:.9rem;"><i class="bi bi-tags me-1"></i>主题分布</span>
+  <div class="d-flex flex-wrap gap-2 mt-2">
+    {% for name, ts in theme_stats.items() %}
+    <a href="{{ url_for('recommendations', theme=name) }}" class="theme-stat-chip">
+      <span class="theme-stat-name">{{ name }}</span>
+      <span class="theme-stat-count">{{ ts.total }}</span>
+      <span class="theme-stat-active">{{ ts.active }}追踪中</span>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
 
 <div class="row g-4">
   <!-- Recent sessions -->
@@ -203,9 +229,14 @@
 <script>
 function refreshPrices() {
   const btn = document.getElementById('refreshBtn');
+  const token = document.querySelector('meta[name="csrf-token"]')?.content;
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>更新中…';
-  fetch('/api/refresh_prices', { method: 'POST', signal: AbortSignal.timeout(120000) })
+  fetch('/api/refresh_prices', {
+    method: 'POST',
+    headers: { 'X-CSRFToken': token },
+    signal: AbortSignal.timeout(120000)
+  })
     .then(r => r.json())
     .then(data => {
       if (data.error) {

@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+{% block title %}供应链图谱{% endblock %}
+
+{% block content %}
+<div class="mb-3 d-flex justify-content-between align-items-center">
+  <div>
+    <h5 class="fw-bold mb-0"><i class="bi bi-diagram-3 me-2"></i>AI基础设施供应链图谱</h5>
+    <div class="text-muted" style="font-size:.82rem;">从原材料到AI应用的完整产业链 · 点击节点查看详情 · <span style="color:#c9a800">★</span> 为当前追踪标的</div>
+  </div>
+</div>
+
+<!-- Legend -->
+<div id="sc-legend" class="d-flex flex-wrap gap-2 mb-3">
+  <button class="sc-leg active" data-cat="material"   style="--c:#8B7355">原材料</button>
+  <button class="sc-leg active" data-cat="equipment"  style="--c:#4472C4">半导体设备</button>
+  <button class="sc-leg active" data-cat="chip_design"style="--c:#2196F3">芯片设计</button>
+  <button class="sc-leg active" data-cat="foundry"    style="--c:#1565C0">制造/封装</button>
+  <button class="sc-leg active" data-cat="memory"     style="--c:#7B1FA2">存储</button>
+  <button class="sc-leg active" data-cat="optical"    style="--c:#0097A7">光通信/网络</button>
+  <button class="sc-leg active" data-cat="server"     style="--c:#E65100">服务器/散热</button>
+  <button class="sc-leg active" data-cat="power"      style="--c:#388E3C">电力/能源</button>
+  <button class="sc-leg active" data-cat="dc_infra"   style="--c:#F57F17">DC基础设施</button>
+  <button class="sc-leg active" data-cat="cloud"      style="--c:#C62828">云平台</button>
+  <button class="sc-leg active" data-cat="ai_model"   style="--c:#BF360C">AI模型/软件</button>
+  <button class="sc-leg active" data-cat="ai_app"     style="--c:#4E342E">AI应用</button>
+</div>
+
+<!-- Main layout -->
+<div class="d-flex gap-3" style="height:640px;">
+  <!-- Graph -->
+  <div class="card flex-grow-1 p-0 position-relative" style="min-width:0; overflow:hidden;">
+    <div id="cy" style="width:100%;height:100%;"></div>
+    <div style="position:absolute;top:10px;right:12px;font-size:10px;color:#aaa;background:rgba(255,255,255,.8);padding:2px 8px;border-radius:99px;">
+      拖拽平移 · 滚轮缩放
+    </div>
+    <div style="position:absolute;bottom:10px;left:10px;display:flex;flex-direction:column;gap:4px;">
+      <button class="btn btn-sm btn-outline-secondary" style="width:30px;height:30px;padding:0;" onclick="cy.zoom(cy.zoom()*1.25)">+</button>
+      <button class="btn btn-sm btn-outline-secondary" style="width:30px;height:30px;padding:0;" onclick="cy.fit(undefined,24)">⊡</button>
+      <button class="btn btn-sm btn-outline-secondary" style="width:30px;height:30px;padding:0;" onclick="cy.zoom(cy.zoom()*0.8)">−</button>
+    </div>
+  </div>
+
+  <!-- Detail panel -->
+  <div id="sc-detail" class="card p-3" style="width:260px;min-width:260px;overflow-y:auto;font-size:.83rem;">
+    <div class="text-muted text-center" style="margin-top:80px;line-height:2;font-size:.8rem;">
+      点击图谱中任意节点<br>查看该供应链环节详情
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.26.0/cytoscape.min.js"></script>
+<style>
+.sc-leg {
+  display:inline-flex; align-items:center; gap:5px;
+  padding:3px 10px; border-radius:99px; font-size:.75rem; font-weight:500;
+  border:1px solid #ddd; background:#fff; color:#444; cursor:pointer; transition:.15s;
+}
+.sc-leg::before { content:''; width:8px; height:8px; border-radius:50%; background:var(--c); flex-shrink:0; }
+.sc-leg:not(.active) { opacity:.4; }
+.sc-leg:hover { border-color:#888; }
+.nb-chip { display:inline-block; padding:1px 7px; border-radius:99px; font-size:.72rem; background:#f0f0f0; color:#555; margin:2px; }
+</style>
+<script>
+const COLORS = {
+  material:'#8B7355', equipment:'#4472C4', chip_design:'#2196F3', foundry:'#1565C0',
+  memory:'#7B1FA2', optical:'#0097A7', server:'#E65100', power:'#388E3C',
+  dc_infra:'#F57F17', cloud:'#C62828', ai_model:'#BF360C', ai_app:'#4E342E'
+};
+const CAT_LBL = {
+  material:'原材料', equipment:'半导体设备', chip_design:'芯片设计', foundry:'制造/封装',
+  memory:'存储', optical:'光通信/网络', server:'服务器/散热', power:'电力/能源',
+  dc_infra:'DC基础设施', cloud:'云平台', ai_model:'AI模型/软件', ai_app:'AI应用'
+};
+
+const NODES = [
+  // Layer 0: 原材料
+  {id:'wafer',    lbl:'硅晶圆',        layer:0, cat:'material',    co:'Shin-Etsu, Sumco, SK Siltronic', tr:[], desc:'芯片制造最基础的原料，300mm硅晶圆主导。AI算力扩张推动晶圆需求持续增长，但供给受限于少数日韩企业。'},
+  {id:'gas',      lbl:'特种气体',       layer:0, cat:'material',    co:'Air Products (APD), Linde (LIN)', tr:[], desc:'半导体制造不可或缺的超高纯气体（氩、氦、氟化物等），供应链高度集中。'},
+  {id:'resist',   lbl:'光刻胶/化学品',  layer:0, cat:'material',    co:'JSR, Merck KGaA, DuPont, Shin-Etsu', tr:[], desc:'EUV光刻胶日本占主导（JSR/Shin-Etsu），是半导体制造卡脖子环节之一。'},
+  {id:'target',   lbl:'靶材/高纯金属',  layer:0, cat:'material',    co:'Materion (MTRN), Heraeus, JX Metals', tr:[], desc:'PVD物理气相沉积关键原料，用于芯片金属层（铜/钨/钛）沉积。'},
+  {id:'fiberraw', lbl:'光纤/光学原料',  layer:0, cat:'material',    co:'Corning (GLW), Prysmian', tr:[], desc:'AI数据中心大规模部署光纤互联，Corning是光纤预制棒全球龙头，需求持续爆发。'},
+  // Layer 1: 半导体设备
+  {id:'litho',    lbl:'光刻设备',       layer:1, cat:'equipment',   co:'ASML（垄断EUV）, Nikon, Canon', tr:[], desc:'ASML垄断EUV光刻机（每台1.5-3.5亿美元），先进节点3nm以下必须用EUV，是全球最大的半导体单点约束。'},
+  {id:'etch',     lbl:'刻蚀/沉积设备',  layer:1, cat:'equipment',   co:'Applied Materials (AMAT), Lam Research (LRCX), TEL', tr:[], desc:'美国设备双雄。AMAT在PVD/CVD占优，Lam Research在刻蚀和ALD占优。HBM叠层制造需大量此类设备。'},
+  {id:'inspect',  lbl:'检测/量测设备',  layer:1, cat:'equipment',   co:'KLA (KLAC), Onto Innovation (ONTO)', tr:[], desc:'KLA是晶圆缺陷检测市场绝对龙头，先进制程良率控制的核心。芯片良率每提升1%价值极大。'},
+  {id:'testeq',   lbl:'芯片测试设备',   layer:1, cat:'equipment',   co:'Teradyne (TER), Advantest, Cohu', tr:[], desc:'AI芯片封装后测试不可跳过，HBM等高带宽存储的测试需求快速增长。'},
+  {id:'mocvd',    lbl:'MOCVD/外延设备', layer:1, cat:'equipment',   co:'Veeco (VECO★), AIXTRON', tr:['VECO'], desc:'MOCVD用于生长GaN/InP等化合物半导体外延层，是光芯片和功率器件制造核心设备。Veeco是北美MOCVD龙头，受益光通信和功率器件扩产。'},
+  // Layer 2: 芯片设计
+  {id:'gpu',      lbl:'GPU/AI加速器',   layer:2, cat:'chip_design', co:'NVIDIA (NVDA), AMD, Intel Gaudi', tr:[], desc:'NVDA H100/B200主导AI训练，市占超80%。AMD MI300X是有力挑战者。Blackwell架构进一步拉大差距，是AI算力核心引擎。'},
+  {id:'asic',     lbl:'ASIC定制AI芯片', layer:2, cat:'chip_design', co:'Broadcom (AVGO), Marvell (MRVL), Google TPU, Amazon Trainium', tr:[], desc:'超大规模云厂商自研ASIC绕开NVDA，Broadcom和Marvell是核心设计服务方。定制ASIC成本更低但灵活性差。'},
+  {id:'netchip',  lbl:'网络/交换芯片',  layer:2, cat:'chip_design', co:'Broadcom (Tomahawk), Marvell, MACOM (MTSI★)', tr:['MTSI'], desc:'AI集群内部需要高速以太网和InfiniBand交换芯片，Broadcom Tomahawk系列主导。MACOM专注高频RF和光子集成电路。'},
+  {id:'cpu',      lbl:'CPU/通用计算',   layer:2, cat:'chip_design', co:'AMD (EPYC), Intel (Xeon), ARM (Neoverse)', tr:[], desc:'AI服务器中GPU的"调度员"，负责数据编排和任务协调。AMD EPYC在数据中心市场份额持续提升。'},
+  // Layer 2: 制造/封装
+  {id:'foundry',  lbl:'晶圆代工',       layer:2, cat:'foundry',     co:'TSMC（AI芯片90%+）, Samsung Foundry, Intel Foundry', tr:[], desc:'TSMC 3nm/2nm代工是AI芯片生产最大瓶颈，CoWoS先进封装产能同样紧缺，直接制约NVDA出货节奏。'},
+  {id:'advpkg',   lbl:'先进封装(CoWoS)',layer:2, cat:'foundry',     co:'TSMC CoWoS, Samsung, ASE Group', tr:[], desc:'HBM与GPU集成的关键技术，TSMC CoWoS是目前唯一成熟方案。AI需求爆发使CoWoS产能极度稀缺。'},
+  {id:'osat',     lbl:'OSAT封装测试',   layer:2, cat:'foundry',     co:'Amkor (AMKR★), ASE Group, JCET(长电)', tr:['AMKR'], desc:'外包封装测试厂，Amkor是北美上市OSAT龙头，受益AI芯片封装需求激增，同时布局先进封装SiP业务。'},
+  {id:'substrate',lbl:'基板/光掩模',    layer:2, cat:'foundry',     co:'Ibiden, Unimicron, Photronics (PLAB★)', tr:['PLAB'], desc:'ABF基板(Ibiden)是AI GPU封装必需品，供给长期紧张。光掩模版是芯片制造前道关键耗材，PLAB是北美龙头。'},
+  // Layer 3: 存储
+  {id:'hbm',      lbl:'HBM高带宽存储',  layer:3, cat:'memory',      co:'SK Hynix (HBM3E 60%+), Micron (MU★), Samsung', tr:['MU'], desc:'AI最紧缺的存储类型，与GPU封装在同一芯片组上。SK Hynix领先，MU HBM3E快速追赶。2025-2026年供不应求持续。每颗H100包含6个HBM堆栈。'},
+  {id:'dram',     lbl:'DRAM服务器内存', layer:3, cat:'memory',      co:'Micron (MU★), SK Hynix, Samsung', tr:['MU'], desc:'AI服务器每台配置512GB-2TB DDR5，是DRAM最大增量需求来源。MU是唯一美国上市存储标的。'},
+  {id:'nand',     lbl:'NAND/企业SSD',   layer:3, cat:'memory',      co:'Western Digital (WDC), Seagate (STX), Samsung', tr:[], desc:'数据中心存储海量训练数据和模型权重，企业SSD需求随AI数据量指数增长。'},
+  {id:'memctrl',  lbl:'存储控制器',     layer:3, cat:'memory',      co:'Marvell (MRVL), Silicon Motion (SIMO), Phison', tr:[], desc:'管理NAND存储读写的核心芯片，NVMe控制器是企业SSD的大脑。Marvell的NVMe控制器主导企业级市场。'},
+  // Layer 3: 光通信/网络
+  {id:'optchip',  lbl:'光芯片/激光器',  layer:3, cat:'optical',     co:'Coherent (COHR★), Lumentum (LITE★), MACOM', tr:['COHR','LITE'], desc:'数据中心光互联核心器件，800G/1.6T光芯片快速放量。COHR和LITE是行业双雄，CPO（共封装光学）是下一阶段技术方向。'},
+  {id:'optmod',   lbl:'光模块/收发器',  layer:3, cat:'optical',     co:'Coherent (COHR★), Fabrinet (FN), 中际旭创', tr:['COHR'], desc:'AI数据中心GPU集群间互联全面光纤化，800G模块2024年进入放量，1.6T是2025-2026主线。每个GPU集群需数千个光模块。'},
+  {id:'switch',   lbl:'交换机/路由器',  layer:3, cat:'optical',     co:'Arista (ANET), Cisco (CSCO), Juniper', tr:[], desc:'Arista是AI数据中心"以太网替代InfiniBand"趋势受益者，Meta/Google均是大客户。AI规模扩张推动订单爆增。'},
+  {id:'intercon', lbl:'AI集群高速互联', layer:3, cat:'optical',     co:'NVIDIA InfiniBand, Broadcom Ethernet, UCIe', tr:[], desc:'万卡GPU集群内需要超低延迟互联，InfiniBand（NVDA Mellanox垄断）vs以太网是当前技术路线之争。'},
+  // Layer 4: 服务器/散热/电源
+  {id:'aiserver', lbl:'AI服务器整机',   layer:4, cat:'server',      co:'Dell, HPE, SuperMicro (SMCI), 浪潮', tr:[], desc:'GB200 NVL72每台含72块Blackwell GPU，单价约300万美元。SuperMicro(SMCI)是AI服务器ODM最受益标的，液冷解决方案领先。'},
+  {id:'cooling',  lbl:'机架/液冷散热',  layer:4, cat:'server',      co:'Vertiv (VRT★), Asetek, Modine', tr:['VRT'], desc:'GB200功耗达120kW/机架，传统风冷无法满足，液冷成为必选。Vertiv是AI数据中心热管理绝对龙头，订单积压超过1年产能。'},
+  {id:'ups',      lbl:'电源/UPS系统',   layer:4, cat:'server',      co:'Vertiv (VRT★), Eaton, Delta, Schneider', tr:['VRT'], desc:'数据中心不间断电源和配电系统，Vertiv产品涵盖UPS到PDU全套，AI建设周期带来超强驱动。'},
+  // Layer 4: 电力/能源
+  {id:'nuclear',  lbl:'核电/清洁基荷',  layer:4, cat:'power',       co:'Constellation (CEG★), Vistra (VST), NRG', tr:['CEG'], desc:'科技巨头（微软/谷歌/亚马逊）签署核电PPA，保障数据中心7×24小时清洁电力。CEG是美国最大核电运营商，三里岛重启是里程碑。'},
+  {id:'fuelcell', lbl:'燃料电池/分布式',layer:4, cat:'power',       co:'Bloom Energy (BE★), Plug Power, FuelCell', tr:['BE'], desc:'燃料电池为数据中心提供分布式清洁电力，响应快、无排放。BE与多家AI大厂签署数据中心供电合同，订单能见度高。'},
+  {id:'grid',     lbl:'电网/变压器',    layer:4, cat:'power',       co:'GE Vernova (GEV), ABB, Eaton, Quanta Services', tr:[], desc:'数据中心用电激增导致电网升级需求爆发，变压器交货期从6个月延长至2年+，供给严重短缺，GE Vernova受益最大。'},
+  {id:'batt',     lbl:'储能/电池系统',  layer:4, cat:'power',       co:'Fluence Energy, Tesla Energy, CATL', tr:[], desc:'可再生能源配储能平滑数据中心供电波动，大型BESS（电池储能系统）部署加速。Tesla储能业务增速超越汽车。'},
+  // Layer 5: DC基础设施
+  {id:'dcbuild',  lbl:'数据中心建设',   layer:5, cat:'dc_infra',    co:'Quanta Services (PWR), Comfort Systems (FIX), AECOM', tr:[], desc:'AI数据中心建设工程，包括机电安装、冷却系统、园区建设。超大规模建设潮带动EPC/MEP承包商订单爆满。'},
+  {id:'dcops',    lbl:'数据中心运营商', layer:5, cat:'dc_infra',    co:'Equinix (EQIX), Digital Realty (DLR), Iron Mountain (IRM)', tr:[], desc:'专业IDC运营商，AI推动超大规模云厂商向IDC租用产能，估值快速重估。EQIX是全球最大互联数据中心。'},
+  {id:'satellite',lbl:'卫星通信/LEO',   layer:5, cat:'dc_infra',    co:'Iridium (IRDM★), EchoStar (SATS★), AST SpaceMobile (ASTS★)', tr:['IRDM','SATS','ASTS'], desc:'AI边缘推理和偏远地区AI接入依赖卫星连接。LEO卫星互联（Starlink/AST）是下一代通信基础设施，ASTS手机直连卫星是颠覆性技术。'},
+  {id:'launch',   lbl:'商业航天/发射',  layer:5, cat:'dc_infra',    co:'Rocket Lab (RKLB★), SpaceX, Intuitive Machines (LUNR★)', tr:['RKLB','LUNR'], desc:'卫星互联网星座部署依赖低成本发射，RKLB Electron/Neutron是中小卫星发射首选。LUNR专注月球探测，NASA CLPS合同提供收入保障。'},
+  // Layer 6: 云平台
+  {id:'csp',      lbl:'超大规模云CSP',  layer:6, cat:'cloud',       co:'AWS (Amazon), Azure (Microsoft), GCP (Google), OCI (Oracle)', tr:[], desc:'四大超大规模云是AI基础设施最终买单者，2025年合计AI资本支出超$3000亿。算力→平台→应用的核心枢纽。'},
+  {id:'aicloud',  lbl:'AI算力云/GPU租用',layer:6, cat:'cloud',      co:'CoreWeave, Lambda Labs, Crusoe Energy', tr:[], desc:'专注GPU算力租赁的新兴云服务商，CoreWeave估值超$200亿。为中小AI公司提供算力入口。'},
+  {id:'edge',     lbl:'边缘计算/CDN',   layer:6, cat:'cloud',       co:'Cloudflare (NET), Fastly, Akamai, AWS Outposts', tr:[], desc:'AI推理向边缘下沉降低延迟，卫星+边缘计算为AI应用提供全球低延迟覆盖。自动驾驶和工业AI是主要驱动场景。'},
+  // Layer 7: AI模型/软件
+  {id:'llm',      lbl:'基础大模型',     layer:7, cat:'ai_model',    co:'OpenAI (GPT-4o), Anthropic (Claude), Google (Gemini), Meta (Llama)', tr:[], desc:'大模型是AI基础设施的"软件操作系统"，消耗最多GPU算力。OpenAI和Anthropic主导商业赛道，Meta开源Llama构建生态。'},
+  {id:'aiplatform',lbl:'AI开发平台/CUDA',layer:7, cat:'ai_model',   co:'NVIDIA CUDA, AMD ROCm, Hugging Face, PyTorch', tr:[], desc:'NVIDIA通过CUDA软件护城河锁定开发者，是AI算力的真正垄断来源。替代路径（ROCm）生态仍薄弱，但差距在缩小。'},
+  {id:'mlops',    lbl:'MLOps/数据平台', layer:7, cat:'ai_model',    co:'Databricks, Snowflake (SNOW), Scale AI, W&B', tr:[], desc:'AI模型训练和推理的数据管理、实验追踪、部署工具链，企业AI落地的基础设施中间层。Databricks估值超$600亿。'},
+  // Layer 8: AI应用
+  {id:'ent_ai',   lbl:'企业AI软件',     layer:8, cat:'ai_app',      co:'Palantir (PLTR), ServiceNow, Salesforce AI, Microsoft Copilot', tr:[], desc:'AI在企业场景落地，从数据分析到流程自动化。Palantir AIP平台是政府和企业AI最前沿应用，客户续约率和NRR持续超预期。'},
+  {id:'auto',     lbl:'自动驾驶/FSD',   layer:8, cat:'ai_app',      co:'Tesla (TSLA★), Waymo, Mobileye (MBLY)', tr:['TSLA'], desc:'FSD是端到端AI推理最复杂的实时应用，Tesla Dojo超算+FSD V13代表技术前沿。Robotaxi是2025-2026商业化关键节点。'},
+  {id:'drone',    lbl:'无人机/国防AI',  layer:8, cat:'ai_app',      co:'AeroVironment (AVAV★), Shield AI, Anduril', tr:['AVAV'], desc:'乌克兰战场验证AI无人机价值，美军快速增加采购预算。AVAV是美军无人机系统第一大供应商。'},
+  {id:'robot',    lbl:'机器人/具身智能',layer:8, cat:'ai_app',      co:'Tesla Optimus, Figure AI, Boston Dynamics', tr:['TSLA'], desc:'大模型赋能机器人实现通用操控，2025年是人形机器人工厂落地元年。Tesla Optimus量产目标2026年。'},
+  {id:'evtol',    lbl:'eVTOL/商业航天', layer:8, cat:'ai_app',      co:'Joby Aviation (JOBY★), Rocket Lab (RKLB★), LUNR★', tr:['JOBY','RKLB','LUNR'], desc:'AI辅助飞控和自主导航是eVTOL的核心技术。Joby获FAA认证进展顺利，商业运营预计2026年。RKLB具备航天和AI基础设施双重属性。'},
+  {id:'fintech',  lbl:'金融/消费AI平台',layer:8, cat:'ai_app',      co:'Robinhood (HOOD★), Coinbase (COIN★), Intuit AI', tr:['HOOD','COIN'], desc:'AI驱动个性化金融服务、智能客服和交易辅助。HOOD引入AI助手提升用户粘性，COIN布局链上AI agent，加密与AI叙事融合。'},
+];
+
+const EDGES = [
+  ['wafer','litho'],['wafer','etch'],['wafer','foundry'],
+  ['gas','etch'],['gas','litho'],['resist','litho'],['target','etch'],['fiberraw','optchip'],
+  ['litho','foundry'],['etch','foundry'],['etch','hbm'],['inspect','foundry'],['testeq','osat'],['mocvd','optchip'],
+  ['gpu','foundry'],['gpu','advpkg'],['asic','foundry'],['netchip','foundry'],['cpu','foundry'],
+  ['foundry','hbm'],['foundry','dram'],['foundry','nand'],['foundry','optchip'],
+  ['advpkg','hbm'],['osat','optmod'],['substrate','foundry'],['substrate','advpkg'],
+  ['hbm','aiserver'],['dram','aiserver'],['nand','dcops'],['memctrl','aiserver'],
+  ['optchip','optmod'],['optmod','switch'],['switch','aiserver'],['intercon','aiserver'],['gpu','intercon'],
+  ['gpu','aiserver'],['asic','aiserver'],['cpu','aiserver'],
+  ['nuclear','dcbuild'],['fuelcell','dcbuild'],['grid','dcbuild'],['batt','dcops'],
+  ['aiserver','dcbuild'],['cooling','dcbuild'],['ups','dcbuild'],
+  ['launch','satellite'],
+  ['dcbuild','csp'],['dcops','csp'],['satellite','edge'],
+  ['csp','aicloud'],['csp','llm'],['aicloud','llm'],['gpu','aiplatform'],['edge','llm'],
+  ['llm','ent_ai'],['llm','auto'],['llm','drone'],['llm','robot'],
+  ['aiplatform','ent_ai'],['aiplatform','mlops'],['mlops','ent_ai'],
+  ['edge','auto'],['edge','drone'],
+];
+
+// Compute positions
+const layerGroups = {};
+NODES.forEach(n => { if(!layerGroups[n.layer]) layerGroups[n.layer]=[]; layerGroups[n.layer].push(n.id); });
+const X_GAP=175, Y_GAP=64, CANVAS_H=600, X_START=90;
+const POS = {};
+Object.entries(layerGroups).forEach(([layer, ids]) => {
+  const x = parseInt(layer)*X_GAP + X_START;
+  const totalH = (ids.length-1)*Y_GAP;
+  const startY = (CANVAS_H - totalH)/2;
+  ids.forEach((id,i) => POS[id] = {x, y: startY + i*Y_GAP});
+});
+
+const elements = [];
+NODES.forEach(n => elements.push({
+  data:{id:n.id, lbl:n.lbl, cat:n.cat, co:n.co, tr:n.tr, desc:n.desc, hasT:n.tr.length>0},
+  position: POS[n.id]
+}));
+EDGES.forEach(([s,t],i) => elements.push({data:{id:'e'+i, source:s, target:t}}));
+
+let cy;
+document.addEventListener('DOMContentLoaded', () => {
+  cy = cytoscape({
+    container: document.getElementById('cy'),
+    elements,
+    style:[
+      { selector:'node', style:{
+        'background-color': e => COLORS[e.data('cat')]||'#888',
+        'label':'data(lbl)', 'font-size':'8.5px', 'color':'#fff',
+        'text-valign':'center', 'text-halign':'center',
+        'width':88, 'height':34, 'shape':'round-rectangle',
+        'text-wrap':'wrap', 'text-max-width':78, 'font-weight':'600',
+      }},
+      { selector:'node[?hasT]', style:{
+        'border-width':2.5, 'border-color':'#FFD700', 'border-style':'solid',
+      }},
+      { selector:'edge', style:{
+        'width':1, 'line-color':'#ccc',
+        'target-arrow-color':'#ccc', 'target-arrow-shape':'triangle',
+        'curve-style':'bezier', 'arrow-scale':0.65, 'opacity':0.4,
+      }},
+      { selector:'node:selected', style:{'border-width':3,'border-color':'#fff'}},
+      { selector:'.hl-edge', style:{'line-color':'#FFD700','target-arrow-color':'#FFD700','opacity':1,'width':2}},
+      { selector:'.dimmed', style:{'opacity':0.12}},
+    ],
+    layout:{name:'preset'},
+    userZoomingEnabled:true, userPanningEnabled:true,
+    minZoom:0.25, maxZoom:2.5, wheelSensitivity:0.3,
+  });
+
+  cy.fit(undefined, 24);
+
+  cy.on('tap','node', function(e){
+    const d = e.target.data();
+    cy.elements().removeClass('hl-edge dimmed').addClass('dimmed');
+    e.target.removeClass('dimmed');
+    const edges = e.target.connectedEdges();
+    edges.removeClass('dimmed').addClass('hl-edge');
+    edges.connectedNodes().removeClass('dimmed');
+
+    const color = COLORS[d.cat];
+    const trackedHtml = d.tr.length
+      ? `<div class="mt-2 p-2 rounded" style="background:#fffbea;border:1px solid #e6b800;font-size:.78rem;">
+           <span style="color:#856404">⭐ 追踪标的：</span><strong>${d.tr.join(' / ')}</strong>
+         </div>` : '';
+    const neighbors = [...new Set([
+      ...e.target.incomers('node').map(n=>n.data('lbl')),
+      ...e.target.outgoers('node').map(n=>n.data('lbl'))
+    ])];
+    const nbHtml = neighbors.length
+      ? `<div class="mt-2"><div class="fw-semibold mb-1" style="font-size:.78rem;color:#555;">相连环节</div>${neighbors.map(l=>`<span class="nb-chip">${l}</span>`).join('')}</div>` : '';
+
+    document.getElementById('sc-detail').innerHTML = `
+      <div class="fw-bold mb-1" style="font-size:.9rem;">${d.lbl}</div>
+      <span class="badge mb-2" style="background:${color}20;color:${color};border:1px solid ${color}50;font-weight:600;font-size:.72rem;">${CAT_LBL[d.cat]}</span>
+      <div class="mb-2" style="line-height:1.65;color:#444;font-size:.8rem;">${d.desc}</div>
+      <div style="font-size:.78rem;color:#656d76;"><strong style="display:block;color:#444;margin-bottom:2px;">主要公司</strong>${d.co}</div>
+      ${trackedHtml}${nbHtml}`;
+  });
+
+  cy.on('tap', e => {
+    if(e.target === cy){
+      cy.elements().removeClass('hl-edge dimmed');
+      document.getElementById('sc-detail').innerHTML = '<div class="text-muted text-center" style="margin-top:80px;line-height:2;font-size:.8rem;">点击图谱中任意节点<br>查看该供应链环节详情</div>';
+    }
+  });
+
+  // Legend toggle
+  document.querySelectorAll('.sc-leg').forEach(el => {
+    el.addEventListener('click', () => {
+      const cat = el.dataset.cat;
+      const active = el.classList.toggle('active');
+      cy.nodes(`[cat="${cat}"]`).style('display', active ? 'element' : 'none');
+    });
+  });
+});
+</script>
+{% endblock %}
