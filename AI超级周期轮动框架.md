@@ -1,3 +1,14 @@
+---
+AIGC:
+  ContentProducer: '001191110102MAD55U9H0F10002'
+  ContentPropagator: '001191110102MAD55U9H0F10002'
+  Label: '1'
+  ProduceID: 'cfaf92b4-1a0a-4da0-a1e7-5cc99f469327'
+  PropagateID: 'cfaf92b4-1a0a-4da0-a1e7-5cc99f469327'
+  ReservedCode1: '7b4fc5dc-7e65-42b1-b851-40df86b93af2'
+  ReservedCode2: '7b4fc5dc-7e65-42b1-b851-40df86b93af2'
+---
+
 # AI 超级周期轮动框架
 > 整理自市场实战观察，结合供应链瓶颈方法论与资金流动规律
 
@@ -172,3 +183,5 @@
 3. **宏观会打断轮动节奏**：加息/衰退预期会让所有波次暂停，等宏观稳定再重启
 4. **第八波（太空）独立性强**：不要强行和 AI 周期挂钩，用独立逻辑评估
 5. **第九波是最难定时的**：应用层受益需要基础设施充分建成，可能比预期晚 1–2 年
+
+> AI生成

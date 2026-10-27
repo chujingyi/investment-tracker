@@ -7,7 +7,7 @@
     <h5 class="fw-bold mb-0">{{ row.title }}</h5>
     <div class="text-muted" style="font-size:.85rem;">
       <span class="catalyst-type-badge catalyst-type-{{ row.event_type }}">{{ row.type_label }}</span>
-      · {{ row.event_date }}
+      · {{ row.scope_label }} · {{ row.event_date }}
     </div>
   </div>
   <a href="{{ url_for('catalysts') }}" class="btn btn-outline-secondary btn-sm">
@@ -47,6 +47,11 @@
             {% endfor %}
           </div>
           {% endif %}
+        </div>
+
+        <div class="text-muted mb-3" style="font-size:.78rem;">
+          来源：{% if row.source_url %}<a href="{{ row.source_url }}" target="_blank" rel="noopener">{{ row.source_name or '手动维护' }}</a>{% else %}{{ row.source_name or '手动维护' }}{% endif %}
+          {% if row.last_checked_at %} · 最近校验 {{ row.last_checked_at[:10] }}{% endif %}
         </div>
 
         {% if row.impact_notes %}
@@ -193,9 +198,9 @@
       <div class="card-body">
         <div class="fw-semibold mb-2" style="font-size:.85rem;">操作</div>
         <form method="post" action="{{ url_for('catalyst_delete', cat_id=row.id) }}"
-              onsubmit="return confirm('确定删除此催化剂？')">
+              onsubmit="return confirm('确定删除此事件？')">
           <button type="submit" class="btn btn-outline-danger btn-sm w-100">
-            <i class="bi bi-trash me-1"></i>删除催化剂
+            <i class="bi bi-trash me-1"></i>删除事件
           </button>
         </form>
       </div>

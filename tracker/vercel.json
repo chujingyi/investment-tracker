@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "app.py": {
+      "excludeFiles": "{tests/**,data/**,bug-report.html,update_prices.py,migrate_to_turso.py}"
+    }
+  }
+}

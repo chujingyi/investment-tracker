@@ -1,13 +1,29 @@
 {% extends "base.html" %}
-{% block title %}供应链图谱{% endblock %}
+{% block title %}主题地图{% endblock %}
 
 {% block content %}
 <div class="mb-3 d-flex justify-content-between align-items-center">
   <div>
-    <h5 class="fw-bold mb-0"><i class="bi bi-diagram-3 me-2"></i>AI基础设施供应链图谱</h5>
-    <div class="text-muted" style="font-size:.82rem;">从原材料到AI应用的完整产业链 · 点击节点查看详情 · <span style="color:#c9a800">★</span> 为当前追踪标的</div>
+    <h5 class="fw-bold mb-0"><i class="bi bi-grid-3x3-gap me-2"></i>主题地图</h5>
+    <div class="text-muted" style="font-size:.82rem;">在 AI 基础设施产业链中定位自选、持仓和历史持仓</div>
   </div>
 </div>
+
+<ul class="nav nav-tabs mb-3">
+  <li class="nav-item"><a class="nav-link" href="{{ url_for('themes', view='rotation', theme=selected_theme) }}">轮动概览</a></li>
+  <li class="nav-item"><a class="nav-link active" href="{{ url_for('themes', view='supply', theme=selected_theme) }}">供应链定位</a></li>
+</ul>
+
+<div class="d-flex flex-wrap gap-1 mb-3 theme-filter-bar">
+  <a class="btn btn-sm {{ 'btn-primary' if not selected_theme else 'btn-outline-secondary' }}" href="{{ url_for('themes', view='supply') }}">全部主题</a>
+  {% for theme in themes %}
+  <a class="btn btn-sm {{ 'btn-primary' if selected_theme == theme else 'btn-outline-secondary' }}" href="{{ url_for('themes', view='supply', theme=theme) }}">{{ theme }}</a>
+  {% endfor %}
+</div>
+
+{% if selected_theme in ('宽基指数',) %}
+<div class="alert alert-light border py-2" style="font-size:.8rem;">宽基指数不是单一产业链，当前图谱不做节点过滤。</div>
+{% endif %}
 
 <!-- Legend -->
 <div id="sc-legend" class="d-flex flex-wrap gap-2 mb-3">
@@ -43,7 +59,7 @@
   <!-- Detail panel -->
   <div id="sc-detail" class="card p-3" style="width:260px;min-width:260px;overflow-y:auto;font-size:.83rem;">
     <div class="text-muted text-center" style="margin-top:80px;line-height:2;font-size:.8rem;">
-      点击图谱中任意节点<br>查看该供应链环节详情
+      点击图谱中任意节点<br>查看环节、相关主题和股票状态
     </div>
   </div>
 </div>
@@ -61,8 +77,11 @@
 .sc-leg:not(.active) { opacity:.4; }
 .sc-leg:hover { border-color:#888; }
 .nb-chip { display:inline-block; padding:1px 7px; border-radius:99px; font-size:.72rem; background:#f0f0f0; color:#555; margin:2px; }
+.stock-chip { display:inline-block; padding:2px 7px; border-radius:99px; font-size:.72rem; background:#fff; color:#664d03; border:1px solid #e6b800; margin:2px; text-decoration:none; }
 </style>
 <script>
+const STOCK_STATES = {{ stock_states|tojson }};
+const SELECTED_THEME = {{ selected_theme|tojson }};
 const COLORS = {
   material:'#8B7355', equipment:'#4472C4', chip_design:'#2196F3', foundry:'#1565C0',
   memory:'#7B1FA2', optical:'#0097A7', server:'#E65100', power:'#388E3C',
@@ -138,6 +157,33 @@ const NODES = [
   {id:'fintech',  lbl:'金融/消费AI平台',layer:8, cat:'ai_app',      co:'Robinhood (HOOD★), Coinbase (COIN★), Intuit AI', tr:['HOOD','COIN'], desc:'AI驱动个性化金融服务、智能客服和交易辅助。HOOD引入AI助手提升用户粘性，COIN布局链上AI agent，加密与AI叙事融合。'},
 ];
 
+const CAT_THEMES = {
+  material:['资源与材料'],
+  equipment:['半导体'], chip_design:['半导体'], foundry:['半导体'], memory:['半导体'],
+  optical:['光通信与网络'],
+  server:['AI数据中心'], dc_infra:['AI数据中心'], cloud:['AI数据中心'], ai_model:['AI数据中心'],
+  power:['电力与公用事业'],
+  ai_app:['互联网与消费'],
+};
+const NODE_THEMES = {
+  satellite:['航空航天与国防'], launch:['航空航天与国防'],
+  drone:['航空航天与国防'], evtol:['航空航天与国防'],
+  auto:['机器人与自动化'], robot:['机器人与自动化'],
+  fintech:['金融','加密资产','互联网与消费'],
+};
+const NODE_SYMBOLS = {
+  gas:['ENTG'], etch:['ACLS'], testeq:['FORM'], netchip:['MTSI','MRVL'],
+  optmod:['FN'], grid:['ETN','GEV'], dcbuild:['PWR'], dcops:['IREN'], csp:['GOOG'],
+};
+
+NODES.forEach(node => {
+  const mentioned = [...node.co.matchAll(/\(([A-Z][A-Z0-9.]{1,6})[★]?\)/g)].map(match => match[1]);
+  const candidates = [...new Set([...(node.tr || []), ...mentioned, ...(NODE_SYMBOLS[node.id] || [])])];
+  node.tr = candidates.filter(symbol => STOCK_STATES[symbol]);
+  node.themes = NODE_THEMES[node.id] || CAT_THEMES[node.cat] || [];
+  node.co = node.co.replaceAll('★', '');
+});
+
 const EDGES = [
   ['wafer','litho'],['wafer','etch'],['wafer','foundry'],
   ['gas','etch'],['gas','litho'],['resist','litho'],['target','etch'],['fiberraw','optchip'],
@@ -172,7 +218,7 @@ Object.entries(layerGroups).forEach(([layer, ids]) => {
 
 const elements = [];
 NODES.forEach(n => elements.push({
-  data:{id:n.id, lbl:n.lbl, cat:n.cat, co:n.co, tr:n.tr, desc:n.desc, hasT:n.tr.length>0},
+  data:{id:n.id, lbl:n.lbl, cat:n.cat, co:n.co, tr:n.tr, themes:n.themes, desc:n.desc, hasT:n.tr.length>0},
   position: POS[n.id]
 }));
 EDGES.forEach(([s,t],i) => elements.push({data:{id:'e'+i, source:s, target:t}}));
@@ -201,6 +247,7 @@ document.addEventListener('DOMContentLoaded', () => {
       { selector:'node:selected', style:{'border-width':3,'border-color':'#fff'}},
       { selector:'.hl-edge', style:{'line-color':'#FFD700','target-arrow-color':'#FFD700','opacity':1,'width':2}},
       { selector:'.dimmed', style:{'opacity':0.12}},
+      { selector:'.theme-dim', style:{'opacity':0.10}},
     ],
     layout:{name:'preset'},
     userZoomingEnabled:true, userPanningEnabled:true,
@@ -208,6 +255,15 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   cy.fit(undefined, 24);
+
+  if (SELECTED_THEME && SELECTED_THEME !== '宽基指数') {
+    cy.nodes().forEach(node => {
+      if (!(node.data('themes') || []).includes(SELECTED_THEME)) node.addClass('theme-dim');
+    });
+    cy.edges().forEach(edge => {
+      if (edge.source().hasClass('theme-dim') && edge.target().hasClass('theme-dim')) edge.addClass('theme-dim');
+    });
+  }
 
   cy.on('tap','node', function(e){
     const d = e.target.data();
@@ -220,8 +276,13 @@ document.addEventListener('DOMContentLoaded', () => {
     const color = COLORS[d.cat];
     const trackedHtml = d.tr.length
       ? `<div class="mt-2 p-2 rounded" style="background:#fffbea;border:1px solid #e6b800;font-size:.78rem;">
-           <span style="color:#856404">⭐ 追踪标的：</span><strong>${d.tr.join(' / ')}</strong>
+           <div style="color:#856404;margin-bottom:3px;">关联股票</div>
+           ${d.tr.map(symbol => {
+             const stock = STOCK_STATES[symbol];
+             return `<a class="stock-chip" href="/stock/${encodeURIComponent(stock.symbol)}">${symbol} · ${stock.label}</a>`;
+           }).join('')}
          </div>` : '';
+    const themeHtml = (d.themes || []).map(theme => `<span class="nb-chip">${theme}</span>`).join('');
     const neighbors = [...new Set([
       ...e.target.incomers('node').map(n=>n.data('lbl')),
       ...e.target.outgoers('node').map(n=>n.data('lbl'))
@@ -233,6 +294,7 @@ document.addEventListener('DOMContentLoaded', () => {
       <div class="fw-bold mb-1" style="font-size:.9rem;">${d.lbl}</div>
       <span class="badge mb-2" style="background:${color}20;color:${color};border:1px solid ${color}50;font-weight:600;font-size:.72rem;">${CAT_LBL[d.cat]}</span>
       <div class="mb-2" style="line-height:1.65;color:#444;font-size:.8rem;">${d.desc}</div>
+      <div class="mb-2" style="font-size:.78rem;color:#656d76;"><strong style="display:block;color:#444;margin-bottom:2px;">关联主题</strong>${themeHtml || '—'}</div>
       <div style="font-size:.78rem;color:#656d76;"><strong style="display:block;color:#444;margin-bottom:2px;">主要公司</strong>${d.co}</div>
       ${trackedHtml}${nbHtml}`;
   });
@@ -240,7 +302,7 @@ document.addEventListener('DOMContentLoaded', () => {
   cy.on('tap', e => {
     if(e.target === cy){
       cy.elements().removeClass('hl-edge dimmed');
-      document.getElementById('sc-detail').innerHTML = '<div class="text-muted text-center" style="margin-top:80px;line-height:2;font-size:.8rem;">点击图谱中任意节点<br>查看该供应链环节详情</div>';
+      document.getElementById('sc-detail').innerHTML = '<div class="text-muted text-center" style="margin-top:80px;line-height:2;font-size:.8rem;">点击图谱中任意节点<br>查看环节、相关主题和股票状态</div>';
     }
   });
 

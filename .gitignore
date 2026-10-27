@@ -28,3 +28,17 @@ cc-equity-research/
 **/.claude/
 **/.workbuddy/
 *.docx
+
+# Python 缓存 / 测试缓存
+.pytest_cache/
+
+# 本地模型与生成产物（体积大 / 可重建）
+.whisper-models/
+outputs/
+
+# 本地审计报告与个人笔记（非项目代码）
+tracker/bug-report.html
+面试分析_*.md
+长桥AI*
+小红书笔记_*
+*.log

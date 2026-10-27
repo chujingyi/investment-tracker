@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}添加催化剂{% endblock %}
+{% block title %}添加事件{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
-  <h5 class="fw-bold mb-0">添加催化剂</h5>
+  <h5 class="fw-bold mb-0">添加事件</h5>
   <a href="{{ url_for('catalysts') }}" class="btn btn-outline-secondary btn-sm">
     <i class="bi bi-arrow-left me-1"></i>返回
   </a>
@@ -13,12 +13,20 @@
   <div class="card-body">
     <form method="post">
       <div class="row g-3">
-        <div class="col-md-8">
+        <div class="col-md-6">
           <label class="form-label fw-semibold">标题 <span class="text-danger">*</span></label>
           <input type="text" name="title" class="form-control" required
-                 placeholder="如：NVDA Q2财报、AAPL除息、COHR拆股">
+                 placeholder="如：美联储议息会议、半导体财报季、NVDA Q2财报">
         </div>
-        <div class="col-md-4">
+        <div class="col-md-3">
+          <label class="form-label fw-semibold">影响范围</label>
+          <select name="event_scope" class="form-select">
+            <option value="macro" selected>宏观</option>
+            <option value="sector">板块</option>
+            <option value="company">个股</option>
+          </select>
+        </div>
+        <div class="col-md-3">
           <label class="form-label fw-semibold">事件类型</label>
           <select name="event_type" id="eventType" class="form-select" onchange="toggleTypeFields()">
             {% for k, v in catalyst_types.items() %}

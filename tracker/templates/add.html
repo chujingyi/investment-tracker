@@ -114,14 +114,21 @@
             <input type="text" name="catalyst" class="form-control"
                    placeholder="一句话概括：例 与NVIDIA合作AI网络实验室，首次商业落地">
           </div>
-          <div class="col-sm-5" id="waitPriceRow">
-            <label class="form-label">等待价格（等回落到）</label>
+          <div class="col-sm-3">
+            <label class="form-label">监控方向</label>
+            <select name="monitor_direction" class="form-select">
+              <option value="pullback">回落到价</option>
+              <option value="breakout">向上突破</option>
+            </select>
+          </div>
+          <div class="col-sm-4" id="waitPriceRow">
+            <label class="form-label">价格条件</label>
             <div class="input-group">
               <span class="input-group-text">$</span>
               <input type="number" name="wait_price" class="form-control" step="0.01" placeholder="0.00">
             </div>
           </div>
-          <div class="col-sm-7" id="waitConditionRow">
+          <div class="col-sm-5" id="waitConditionRow">
             <label class="form-label">等待条件说明</label>
             <input type="text" name="wait_condition" class="form-control"
                    placeholder="例：等回落到20日均线 / 等财报后反应">

@@ -1,0 +1,520 @@
+{% extends "base.html" %}
+{% block title %}AI 助手{% endblock %}
+{% block content %}
+
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+  <div>
+    <h5 class="mb-1"><i class="bi bi-robot me-2 text-success"></i>AI 投资助手
+      {% if llm_configured %}
+        <span class="badge bg-success-subtle text-success border border-success-subtle ms-2 align-middle" style="font-size:.7rem;">已连接 {{ llm_model }}</span>
+      {% else %}
+        <span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle ms-2 align-middle" style="font-size:.7rem;">未配置 LLM</span>
+      {% endif %}
+    </h5>
+    <div class="text-muted" style="font-size:.78rem;">
+      每次对话自动注入你的持仓、监控与风控规则；写操作需人工审批后才会执行
+      <span id="budgetInfo" class="ms-2"></span>
+    </div>
+  </div>
+  <div class="d-flex gap-2">
+    <button class="btn btn-outline-success btn-sm" id="morningBtn" onclick="morningReport()">
+      <i class="bi bi-sunrise me-1"></i>生成晨报
+    </button>
+    <button class="btn btn-success btn-sm" onclick="newChat()">
+      <i class="bi bi-plus-circle me-1"></i>新建会话
+    </button>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-3 order-lg-1 order-2">
+    <div class="card shadow-sm" style="border-radius:.75rem;">
+      <div class="card-header py-2 fw-semibold" style="font-size:.85rem;"><i class="bi bi-collection me-1"></i>会话列表</div>
+      <div class="list-group list-group-flush" id="chatList" style="max-height:34vh; overflow-y:auto; border-radius:0 0 .75rem .75rem;"></div>
+    </div>
+    <div class="card shadow-sm mt-3" style="border-radius:.75rem;">
+      <div class="card-header py-2 d-flex justify-content-between align-items-center" style="font-size:.85rem;">
+        <span class="fw-semibold"><i class="bi bi-diagram-3 me-1"></i>任务流</span>
+        <span>
+          <button class="btn btn-outline-success btn-sm py-0 px-2" style="font-size:.72rem;" onclick="scanEvents()">扫描</button>
+          <button class="btn btn-outline-primary btn-sm py-0 px-2 ms-1" style="font-size:.72rem;" onclick="manualReview()">立即复盘</button>
+        </span>
+      </div>
+      <div class="list-group list-group-flush" id="taskList" style="max-height:26vh; overflow-y:auto; font-size:.78rem;"></div>
+    </div>
+    <div class="card shadow-sm mt-3" style="border-radius:.75rem;">
+      <div class="card-header py-2 fw-semibold" style="font-size:.85rem;"><i class="bi bi-graph-up me-1"></i>评测</div>
+      <div class="card-body p-2" id="metricsBox" style="font-size:.74rem; max-height:32vh; overflow-y:auto;">
+        <div class="text-muted text-center py-2">加载中…</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-9 order-lg-2 order-1">
+      <div class="card shadow-sm agent-chat-card" style="border-radius:.75rem;">
+      <div class="chat-pane d-flex flex-column" id="chatPane">
+        <div class="chat-scroll flex-grow-1 p-3" id="chatScroll">
+          <div id="chatIntro"></div>
+          <div id="chatFlow"></div>
+        </div>
+        <div class="border-top p-2">
+          <div class="d-flex gap-2 align-items-end">
+            <textarea id="chatInput" class="form-control" rows="1" placeholder="问点什么，例如：我的组合今天有什么变化？"
+              style="resize:none; max-height:120px; flex:1 1 auto; min-width:0;"></textarea>
+            <button class="btn btn-success px-3 flex-shrink-0" id="sendBtn" style="white-space:nowrap;" onclick="sendMessage()">发送</button>
+          </div>
+          <div class="text-muted mt-1" style="font-size:.72rem;">Enter 发送 / Shift+Enter 换行 · Agent 的买卖建议仅供参考，实盘操作请自行判断</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .msg-user, .msg-agent { max-width: 88%; margin-bottom: .65rem; }
+  .msg-user { margin-left: auto; }
+  .msg-user .bubble { background: var(--bs-success); color: #fff; border-radius: .9rem .9rem .2rem .9rem; padding: .55rem .8rem; }
+  .msg-agent .bubble { background: var(--bs-body-bg); border: 1px solid var(--bs-border-color); border-radius: .9rem .9rem .9rem .2rem; padding: .55rem .8rem; white-space: pre-wrap; }
+  .tool-line { font-size: .76rem; color: var(--bs-secondary-color); border-left: 2px solid var(--bs-border-color); padding: .15rem 0 .15rem .6rem; margin: .3rem 0 .3rem .5rem; overflow-wrap: break-word; }
+  .tool-line > div { overflow-wrap: break-word; }
+  .tool-ok { color: var(--bs-success-text-emphasis); }
+  .tool-pending { color: var(--bs-warning-text-emphasis); }
+  .tool-bad { color: var(--bs-danger-text-emphasis); }
+  .pending-card { border: 1px solid var(--bs-warning-border-subtle); background: var(--bs-warning-bg-subtle); border-radius: .6rem; padding: .6rem .8rem; margin: .5rem 0; max-width: 92%; font-size: .84rem; }
+  .pending-card.resolved { opacity: .75; }
+  .usage-line { font-size: .7rem; color: var(--bs-tertiary-color); margin-top: .25rem; overflow-wrap: break-word; }
+  .msg-agent, .msg-user { min-width: 0; }
+  .msg-agent .bubble, .msg-user .bubble { overflow-wrap: break-word; }
+  .chat-item { cursor: pointer; }
+  .chat-item.active { background: var(--bs-success-bg-subtle); }
+  .chat-suggest { cursor: pointer; font-size: .82rem; }
+  .chat-suggest:hover { background: var(--bs-tertiary-bg); }
+
+  /* Keep long conversations inside the chat card instead of letting them
+     increase the flex item's automatic minimum height. */
+  .agent-chat-card, #chatPane { min-height: 0; }
+  #chatPane { height: calc(100vh - 230px); height: calc(100dvh - 230px); overflow: hidden; }
+  #chatScroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; overflow-wrap: anywhere; }
+  #chatFlow { min-width: 0; }
+
+  @media (max-width: 991.98px) {
+    #chatPane { height: min(68vh, 760px); height: min(68dvh, 760px); min-height: 360px; }
+  }
+  @media (max-width: 575.98px) {
+    #chatPane { height: 68vh; height: 68dvh; min-height: 320px; }
+    .msg-user, .msg-agent { max-width: 96%; }
+  }
+</style>
+
+<script>
+const esc = (s) => String(s == null ? '' : s)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
+let currentChatId = null;
+let sending = false;
+
+const STATUS_META = {
+  ok:          ['bi-check-circle-fill', 'tool-ok', '完成'],
+  pending_approval: ['bi-hourglass-split', 'tool-pending', '待审批'],
+  invalid:     ['bi-exclamation-triangle-fill', 'tool-bad', '校验未过'],
+  blocked:     ['bi-slash-circle', 'tool-bad', '被拦截'],
+  error:       ['bi-x-circle-fill', 'tool-bad', '失败'],
+};
+
+const TASK_BADGE = {
+  queued:            ['bg-secondary', '排队'],
+  running:           ['bg-info', '执行中'],
+  waiting_approval:  ['bg-warning text-dark', '待审批'],
+  succeeded:         ['bg-success', '完成'],
+  rejected:          ['bg-danger', '被拒'],
+  retrying:          ['bg-primary', '重试'],
+  failed:            ['bg-danger', '失败'],
+  cancelled:         ['bg-dark', '归档'],
+};
+
+const WF_LABEL = { chat: '对话', morning: '晨报', monitor: '研判', review: '复盘', research: '研究' };
+
+function toolBadge(status) {
+  const meta = STATUS_META[status] || ['bi-gear', '', status];
+  return `<i class="bi ${meta[0]} ${meta[1]}"></i> <span class="${meta[1]}">${esc(meta[2])}</span>`;
+}
+
+function toolLineHtml(item) {
+  const argsText = item.args ? esc(JSON.stringify(item.args).slice(0, 160)) : '';
+  const spacedArgs = argsText.replace(/([:,{}\[\]"])/g, ' ');
+  return `<div class="tool-line">
+    <i class="bi bi-gear-wide-connected"></i> <strong>${esc(item.name)}</strong>
+    <span class="mx-1">·</span>${toolBadge(item.status)}
+    <span class="mx-1">·</span>${item.duration_ms || 0}ms
+    <div style="margin-top:.1rem;">${esc(item.summary || '')}</div>
+    ${spacedArgs ? `<div style="opacity:.6; font-size:.7rem;">参数: ${spacedArgs}</div>` : ''}
+  </div>`;
+}
+
+function pendingCardHtml(p) {
+  let args = '';
+  try { args = JSON.stringify(JSON.parse(p.args_json || '{}'), null, 1); } catch (e) { args = p.args_json || ''; }
+  const resolved = p.status !== 'pending';
+  let statusBadge = '';
+  if (p.status === 'approved') statusBadge = '<span class="badge bg-success">已批准并执行</span>';
+  if (p.status === 'failed') statusBadge = '<span class="badge bg-danger">执行失败</span>';
+  if (p.status === 'cancelled') statusBadge = '<span class="badge bg-secondary">已取消</span>';
+  if (p.status === 'rejected') statusBadge = '<span class="badge bg-secondary">已拒绝</span>';
+  let resultText = '';
+  try {
+    if (p.result_json) {
+      const r = JSON.parse(p.result_json);
+      if (r && (r.summary || r.error)) resultText = `<div class="mt-1" style="font-size:.78rem;"><i class="bi bi-arrow-return-right"></i> ${esc(r.summary || r.error)}</div>`;
+    }
+  } catch (e) {}
+  return `<div class="pending-card ${resolved ? 'resolved' : ''}">
+    <div class="d-flex justify-content-between align-items-start gap-2">
+      <div>
+        <i class="bi bi-shield-check text-warning"></i>
+        <strong>待审批写操作 #${p.id}</strong>
+        <span class="badge bg-warning text-dark ms-1">${esc(p.tool_name)}</span>
+        <div class="mt-1">${esc(p.summary)}</div>
+        ${resultText}
+        <details class="mt-1" style="font-size:.72rem;"><summary>查看参数</summary>
+          <pre class="mb-0 mt-1" style="white-space:pre-wrap;">${esc(args)}</pre>
+        </details>
+      </div>
+      <div class="text-end">
+        ${statusBadge}
+        ${!resolved ? `<div class="mt-2 d-flex gap-1 justify-content-end">
+          <button class="btn btn-success btn-sm" onclick="resolvePending(${p.id}, 'approve')"><i class="bi bi-check-lg"></i> 批准</button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="resolvePending(${p.id}, 'reject')"><i class="bi bi-x-lg"></i> 拒绝</button>
+        </div>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
+function userBubble(text) {
+  return `<div class="msg-user"><div class="bubble">${esc(text)}</div></div>`;
+}
+
+function agentBubble(text, toolCalls, usage) {
+  const toolsHtml = (toolCalls || []).map(toolLineHtml).join('');
+  const usageHtml = usage ? `<div class="usage-line">${usage.prompt_tokens + usage.completion_tokens} tokens · 模型 ${esc(usage.model || '')}</div>` : '';
+  return `<div class="msg-agent">
+    ${toolsHtml ? `<div class="mb-2">${toolsHtml}</div>` : ''}
+    <div class="bubble">${esc(text)}</div>${usageHtml}
+  </div>`;
+}
+
+function renderMessages(messages, pendings) {
+  const flow = document.getElementById('chatFlow');
+  const items = [];
+  (messages || []).forEach(m => items.push({ type: 'msg', at: m.created_at, m }));
+  (pendings || []).forEach(p => items.push({ type: 'pending', at: p.created_at, p }));
+  items.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  let html = '';
+  for (const item of items) {
+    if (item.type === 'pending') { html += pendingCardHtml(item.p); continue; }
+    const m = item.m;
+    if (m.role === 'user') { html += userBubble(m.content); continue; }
+    if (m.role === 'assistant') {
+      const hasTools = (m.tool_calls || []).length > 0;
+      if (hasTools || m.content) html += agentBubble(m.content, m.tool_calls);
+    }
+  }
+  flow.innerHTML = html;
+  scrollBottom();
+}
+
+function renderIntro() {
+  const intro = document.getElementById('chatIntro');
+  if (currentChatId) { intro.innerHTML = ''; return; }
+  const suggestions = [
+    '我的组合今天有什么变化？',
+    'MU 现在什么情况，还符合供应链瓶颈框架吗？',
+    '把 VECO 录入为观察，触发价 78，conviction 4',
+    '未来两周有什么重要财报或事件？',
+  ];
+  intro.innerHTML = `<div class="text-center text-muted py-4">
+    <i class="bi bi-robot" style="font-size:2.4rem;"></i>
+    <div class="fw-semibold mt-2 mb-1" style="font-size:.95rem;">选择或新建一个会话开始</div>
+    <div style="font-size:.8rem;">我可以查询持仓/推荐/行情/日历，检索投资框架，并在你批准后录入推荐</div>
+    <div class="d-flex flex-wrap gap-2 justify-content-center mt-3">
+      ${suggestions.map(s => `<span class="badge bg-light text-dark border chat-suggest" onclick="quickAsk(${JSON.stringify(s).replace(/"/g, '&quot;')})">${esc(s)}</span>`).join('')}
+    </div>
+  </div>`;
+}
+
+function quickAsk(text) {
+  document.getElementById('chatInput').value = text;
+  if (!currentChatId) { newChat().then(() => sendMessage()); } else { sendMessage(); }
+}
+
+function scrollBottom() {
+  const el = document.getElementById('chatScroll');
+  el.scrollTop = el.scrollHeight;
+}
+
+async function loadState(selectFirst = false) {
+  try {
+    const res = await fetch('/api/agent/state');
+    const data = await res.json();
+    loadTaskFlow();
+    loadMetrics();
+    const list = document.getElementById('chatList');
+    document.getElementById('budgetInfo').textContent =
+      `· 今日 token ${data.budget.used_today}/${data.budget.limit}`;
+    const chats = data.chats || [];
+    list.innerHTML = chats.length ? chats.map(c => `
+      <div class="list-group-item chat-item ${c.id === currentChatId ? 'active' : ''}"
+           onclick="selectChat(${c.id})">
+        <div class="d-flex justify-content-between">
+          <span style="font-size:.83rem;" class="text-truncate">
+            <i class="bi ${c.kind === 'morning' ? 'bi-sunrise text-warning' : 'bi-chat-dots text-success'} me-1"></i>${esc(c.title)}
+          </span>
+          <span class="text-muted" style="font-size:.68rem;">${esc(String(c.created_at).slice(5, 10))}</span>
+        </div>
+      </div>`).join('') : '<div class="list-group-item text-muted text-center" style="font-size:.8rem;">暂无会话</div>';
+    if (selectFirst && !currentChatId && chats.length) selectChat(chats[chats.length - 1].id);
+    if (!data.llm.configured) {
+      document.getElementById('chatIntro').innerHTML = `<div class="alert alert-warning py-2" style="font-size:.82rem;">
+        <i class="bi bi-exclamation-triangle me-1"></i>尚未配置 LLM：在 tracker/.env 中设置 <code>LLM_API_KEY</code>（可选 <code>LLM_BASE_URL</code> / <code>LLM_MODEL</code>）后重启即可对话。
+      </div>`;
+    }
+  } catch (e) { console.error(e); }
+}
+
+async function loadTaskFlow() {
+  try {
+    const res = await fetch('/api/agent/tasks?limit=8');
+    const data = await res.json();
+    const list = document.getElementById('taskList');
+    const tasks = (data.tasks || []);
+    list.innerHTML = tasks.length ? tasks.map(t => {
+      const badge = TASK_BADGE[t.status] || ['bg-secondary', t.status];
+      return `<div class="list-group-item d-flex justify-content-between align-items-center px-2 py-1">
+        <span class="text-truncate"><strong>${WF_LABEL[t.workflow] || t.workflow}</strong> #${t.id}
+          <span class="text-muted" style="font-size:.68rem;">${esc(String(t.created_at).slice(5,16))}</span></span>
+        <span><button class="btn btn-link btn-sm p-0 me-1" onclick="showTask(${t.id})">详情</button>
+        ${['queued','running','retrying','waiting_approval'].includes(t.status) ? `<button class="btn btn-link btn-sm p-0 me-1" onclick="cancelTask(${t.id})">取消</button>` : ''}
+        <span class="badge ${badge[0]} flex-shrink-0">${esc(badge[1])}</span></span>
+      </div>`;
+    }).join('') : '<div class="list-group-item text-muted text-center py-2" style="font-size:.75rem;">暂无任务</div>';
+  } catch (e) { console.error(e); }
+}
+
+async function showTask(id) {
+  try {
+    const res = await fetch('/api/agent/tasks/' + id);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    const t = data.task;
+    alert('任务 #' + id + '：' + t.status_label + '\n' + (t.steps || []).map(s => s.name + ': ' + s.status).join('\n') + '\n' + (t.result.error || t.result.warning || ''));
+    if (t.chat_id) await selectChat(t.chat_id);
+  } catch (e) { alert(e.message); }
+}
+
+async function cancelTask(id) {
+  const res = await fetch('/api/agent/tasks/' + id + '/cancel', {method:'POST'});
+  if (!res.ok) { alert('取消失败'); return; }
+  loadTaskFlow(); loadState();
+}
+
+async function loadMetrics() {
+  const box = document.getElementById('metricsBox');
+  if (!box) return;
+  try {
+    const res = await fetch('/api/agent/metrics');
+    const data = await res.json();
+    const o = data.online || {}, off = data.offline;
+    const t = o.tasks || {}, a = o.approvals || {}, tools = o.tools || {}, c = o.cost || {}, lat = o.latency || {};
+    const wfRows = Object.entries(t.by_workflow || {}).map(([wf, v]) =>
+      `<div class="d-flex justify-content-between"><span>${WF_LABEL[wf] || wf}</span>
+       <span>${v.succeeded}/${v.total} <span class="text-muted">${v.completion_rate == null ? '-' : v.completion_rate + '%'}</span></span></div>`).join('');
+    let offlineHtml = '<div class="text-muted">尚未跑过历史推荐表现（cli eval）</div>';
+    if (off) {
+      const w30 = (off.windows || {})['30'] || {};
+      const diff = (off.baseline_diff || {})['30'];
+      const diffHtml = diff != null ? `<span class="${diff >= 0 ? 'text-success' : 'text-danger'}">${diff >= 0 ? '▲' : '▼'}${Math.abs(diff)}pp</span>` : '';
+      const stop = off.stop_hit || {};
+      offlineHtml = `<div>30天上涨比例 <strong>${w30.direction_hit_rate ?? '-'}%</strong> 收益 ${w30.avg_return_pct ?? '-'}% ${diffHtml}</div>
+        <div>收盘价触及止损线 ${stop.hit_rate ?? '-'}%（${stop.n || 0}/${stop.samples || 0}） · 完整30天样本 ${w30.eval_samples || 0}，排除 ${w30.excluded_samples || 0}</div>
+        <div class="text-muted">数据截至 ${esc(off.data_as_of || '未知')}；历史表现不等于模型质量</div>`;
+    }
+    box.innerHTML = `
+      <div class="row g-1 text-center mb-1">
+        <div class="col-6"><div class="border rounded py-1"><div class="fw-bold">${t.completion_rate ?? '-'}%</div><div class="text-muted">任务完成率</div></div></div>
+        <div class="col-6"><div class="border rounded py-1"><div class="fw-bold">${a.approval_rate == null && a.pending > 0 ? '<span class="badge bg-warning text-dark">待审批 ' + a.pending + ' 张</span>' : (a.approval_rate == null ? '-' : a.approval_rate + '%')}</div><div class="text-muted">审批通过率${a.pending > 0 ? '（' + a.pending + ' 待处理）' : ''}</div></div></div>
+        <div class="col-6"><div class="border rounded py-1"><div class="fw-bold">${c.total_cny ?? 0} 元</div><div class="text-muted">累计估算成本</div></div></div>
+        <div class="col-6"><div class="border rounded py-1"><div class="fw-bold">${tools.total ?? 0}</div><div class="text-muted">工具调用</div></div></div>
+      </div>
+      ${a.pending > 0 ? `<div class="alert alert-warning py-1 px-2 mb-1" style="font-size:.72rem;"><i class="bi bi-hourglass-split"></i> 有 ${a.pending} 张审批卡片待处理——在左侧会话列表打开对应会话即可批准/拒绝</div>` : ''}
+      <div class="mt-2 text-muted">任务分布</div>${wfRows || '<div class="text-muted">暂无任务</div>'}
+      <div class="mt-2 text-muted">历史推荐表现</div>${offlineHtml}
+      <div class="mt-1 text-muted" style="font-size:.68rem; overflow-wrap:break-word;">任务均值 ${lat.task_avg_ms ?? '-'}ms · 单价输入${c.prices ? c.prices.input_per_m : 1}/输出${c.prices ? c.prices.output_per_m : 2} 元/M token</div>`;
+  } catch (e) {
+    box.innerHTML = '<div class="text-muted">评测数据加载失败</div>';
+  }
+}
+
+async function scanEvents() {
+  try {
+    const res = await fetch('/api/agent/events/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const data = await res.json();
+    if (!res.ok) { alert('扫描失败：' + (data.error || res.status)); return; }
+    alert('扫描完成：' + JSON.stringify(data.scanned) + '，新任务 ' + data.dispatched + '，后台 Worker 将按队列执行');
+    loadTaskFlow();
+  } catch (e) { alert('网络错误：' + e.message); }
+}
+
+async function manualReview() {
+  const ticker = prompt('复盘范围：留空=全部到期项，或输入 ticker 单只复盘', '');
+  if (ticker === null) return;
+  try {
+    const res = await fetch('/api/agent/workflows/review/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker: ticker.trim() || '' }),
+    });
+    const data = await res.json();
+    if (!res.ok) { alert('复盘失败：' + (data.error || res.status)); return; }
+    const completed = await waitTask(data.task_id);
+    alert('复盘完成，请到聊天/审批卡片确认');
+    const chat = completed.chat_id;
+    if (chat) selectChat(chat);
+    loadTaskFlow();
+  } catch (e) { alert('网络错误：' + e.message); }
+}
+
+async function selectChat(id) {
+  currentChatId = id;
+  document.getElementById('chatIntro').innerHTML = '';
+  document.getElementById('chatFlow').innerHTML = '';
+  try {
+    const res = await fetch('/api/agent/messages?chat_id=' + id);
+    const data = await res.json();
+    renderMessages(data.messages, data.pendings);
+  } catch (e) { console.error(e); }
+  loadState();
+}
+
+async function newChat() {
+  const res = await fetch('/api/agent/chats', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  const data = await res.json();
+  currentChatId = data.chat_id;
+  document.getElementById('chatIntro').innerHTML = '';
+  document.getElementById('chatFlow').innerHTML = '';
+  await loadState();
+  document.getElementById('chatInput').focus();
+}
+
+async function waitTask(taskId) {
+  for (let i = 0; i < 150; i++) {
+    const response = await fetch('/api/agent/tasks/' + taskId);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '读取任务失败');
+    const task = data.task;
+    loadTaskFlow();
+    if (['succeeded','waiting_approval','failed','cancelled'].includes(task.status)) {
+      if (task.status === 'failed' || task.status === 'cancelled') throw new Error(task.result.error || task.result.reason || '任务未完成');
+      return task;
+    }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
+  throw new Error('任务仍在后台排队或执行，请稍后查看任务列表；请确认后台 Worker 已启动');
+}
+
+async function sendMessage() {
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if (!text || sending) return;
+  if (!currentChatId) { await newChat(); }
+  sending = true;
+  document.getElementById('sendBtn').disabled = true;
+  input.value = '';
+  const flow = document.getElementById('chatFlow');
+  flow.insertAdjacentHTML('beforeend', userBubble(text));
+  const loadingId = 'loading-' + Date.now();
+  flow.insertAdjacentHTML('beforeend', `<div class="msg-agent" id="${loadingId}"><div class="bubble text-muted"><span class="spinner-border spinner-border-sm me-1"></span>思考中…</div></div>`);
+  scrollBottom();
+  try {
+    const res = await fetch('/api/agent/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: currentChatId, message: text }),
+    });
+    let data = await res.json();
+    if (res.status === 202) {
+      const task = await waitTask(data.task_id);
+      const messages = await fetch('/api/agent/messages?chat_id=' + currentChatId);
+      const saved = await messages.json();
+      renderMessages(saved.messages, saved.pendings);
+      data = {answer: task.result.answer, tool_calls: [], pending: []};
+      document.getElementById(loadingId)?.remove();
+      sending = false;
+      document.getElementById('sendBtn').disabled = false;
+      loadState();
+      return;
+    }
+    document.getElementById(loadingId)?.remove();
+    if (!res.ok) {
+      flow.insertAdjacentHTML('beforeend', `<div class="msg-agent"><div class="bubble text-danger" style="border-color:var(--bs-danger);">请求失败：${esc(data.error || res.status)}</div></div>`);
+    } else {
+      const toolCalls = (data.tool_calls || []).map(t => ({ ...t }));
+      const html = agentBubble(data.answer, toolCalls, { ...data.usage, model: data.model });
+      flow.insertAdjacentHTML('beforeend', html);
+      const pendings = (data.pending || []).filter(p => p.id);
+      if (pendings.length) {
+        const res2 = await fetch('/api/agent/messages?chat_id=' + currentChatId);
+        const data2 = await res2.json();
+        renderMessages(data2.messages, data2.pendings);
+      }
+    }
+    scrollBottom();
+  } catch (e) {
+    document.getElementById(loadingId)?.remove();
+    flow.insertAdjacentHTML('beforeend', `<div class="msg-agent"><div class="bubble text-danger">网络错误：${esc(e.message)}</div></div>`);
+  }
+  sending = false;
+  document.getElementById('sendBtn').disabled = false;
+  loadState();
+}
+
+async function resolvePending(id, action) {
+  try {
+    const res = await fetch(`/api/agent/pending/${id}/resolve`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, reason: action === 'reject' ? (prompt('拒绝原因（可选）', '') || '') : '' }),
+    });
+    if (!res.ok) { const d = await res.json(); alert(d.error || '操作失败'); return; }
+    const data = await fetch('/api/agent/messages?chat_id=' + currentChatId);
+    const msgs = await data.json();
+    renderMessages(msgs.messages, msgs.pendings);
+    loadState();
+  } catch (e) { alert('网络错误：' + e.message); }
+}
+
+async function morningReport() {
+  const btn = document.getElementById('morningBtn');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>生成中…';
+  try {
+    const res = await fetch('/api/agent/morning_report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const data = await res.json();
+    if (!res.ok) { alert('晨报生成失败：' + (data.error || res.status)); }
+    else {
+      const task = await waitTask(data.task_id);
+      await loadState();
+      selectChat(task.chat_id);
+    }
+  } catch (e) { alert('网络错误：' + e.message); }
+  btn.disabled = false;
+  btn.innerHTML = '<i class="bi bi-sunrise me-1"></i>生成晨报';
+}
+
+document.getElementById('chatInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+
+loadState(true);
+renderIntro();
+setInterval(() => loadState(), 60000);
+</script>
+{% endblock %}

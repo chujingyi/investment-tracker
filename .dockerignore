@@ -1,0 +1,17 @@
+**/.git
+**/.env
+**/*.env
+**/*.db
+**/*.db-*
+**/__pycache__
+**/.pytest_cache
+**/.claude
+**/.workbuddy
+.temp
+.whisper-models
+cc-equity-research
+outputs
+image-cards
+**/*.png
+**/*.jpg
+**/*.pdf

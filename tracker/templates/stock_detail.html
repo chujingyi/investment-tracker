@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block title %}{{ ticker }} 全流程{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+  <a href="{{ url_for('recommendations') }}" class="text-muted" style="font-size:.85rem;">
+    <i class="bi bi-arrow-left me-1"></i>返回股票全流程
+  </a>
+</div>
+
+<div class="card mb-4">
+  <div class="card-body d-flex justify-content-between align-items-start flex-wrap gap-3">
+    <div>
+      <div class="d-flex align-items-center gap-2">
+        <span style="font-size:1.8rem;font-weight:800;">{{ ticker }}</span>
+        <span class="text-muted">{{ market }}</span>
+        <span class="lifecycle-badge {{ lifecycle_info[1] }}">{{ lifecycle_info[0] }}</span>
+      </div>
+      {% if position and position.name %}<div class="text-muted">{{ position.name }}</div>{% endif %}
+    </div>
+    {% if position %}
+    <div class="d-flex gap-4 text-end">
+      <div><div class="text-muted" style="font-size:.75rem;">持有数量</div><div class="fw-bold">{{ "%g"|format(position.quantity) }} 股</div></div>
+      <div><div class="text-muted" style="font-size:.75rem;">平均成本</div><div class="fw-bold">${{ "%.2f"|format(position.cost_price) }}</div></div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-7">
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-signpost-split me-1"></i>生命周期</div>
+      <div class="card-body">
+        {% if timeline %}
+        <div class="stock-timeline">
+          {% for item in timeline %}
+          <div class="timeline-item timeline-{{ item.kind }}">
+            <div class="timeline-dot"></div>
+            <div class="timeline-body">
+              <div class="d-flex justify-content-between gap-2">
+                <strong>{{ item.title }}</strong>
+                <span class="text-muted" style="font-size:.75rem;">{{ item.at[:16].replace('T', ' ') }}</span>
+              </div>
+              <div class="text-muted" style="font-size:.82rem;">{{ item.detail }}</div>
+              {% if item.kind == 'recommendation' and item.rec.catalyst %}
+              <div style="font-size:.8rem;" class="mt-1">{{ item.rec.catalyst }}</div>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% else %}<div class="text-muted text-center py-4">暂无流程记录</div>{% endif %}
+      </div>
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-receipt me-1"></i>长桥成交记录</div>
+      {% if trades %}
+      <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+          <thead><tr><th>时间</th><th>方向</th><th>数量</th><th>成交价</th><th>原始代码</th></tr></thead>
+          <tbody>
+            {% for trade in trades %}
+            {% set is_buy = trade.side|lower == 'buy' %}
+            <tr>
+              <td class="text-muted" style="font-size:.78rem;">{{ trade.trade_done_at[:16].replace('T', ' ') }}</td>
+              <td><span class="badge {{ 'bg-danger' if is_buy else 'bg-success' }}">{{ '买入' if is_buy else '卖出' }}</span></td>
+              <td>{{ "%g"|format(trade.quantity) }}</td>
+              <td>${{ "%.4f"|format(trade.price) }}</td>
+              <td class="text-muted" style="font-size:.75rem;">{{ trade.original_symbol }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}<div class="card-body text-muted text-center py-4">从未在长桥成交</div>{% endif %}
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <div class="card mb-3">
+      <div class="card-header"><i class="bi bi-lightbulb me-1"></i>选标与观察记录</div>
+      <div class="card-body">
+        {% if recs %}
+        {% for rec in recs %}
+        <div class="{% if not loop.last %}border-bottom pb-3 mb-3{% endif %}">
+          <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
+            <div>
+              <span class="entry-badge {{ rec.entry_rec_label[1] }}">{{ rec.entry_rec_label[0] }}</span>
+              <span class="text-muted ms-1" style="font-size:.75rem;">{{ rec.created_at }}</span>
+            </div>
+            <a href="{{ url_for('detail', rec_id=rec.id) }}" class="btn btn-outline-secondary btn-sm">完整记录</a>
+          </div>
+          <div class="fw-semibold" style="font-size:.87rem;">{{ rec.framework_name }}</div>
+          {% if rec.session_question %}<div class="text-muted" style="font-size:.78rem;">{{ rec.session_question }}</div>{% endif %}
+          {% if rec.wait_condition %}<div class="mt-2" style="font-size:.8rem;"><strong>触发条件：</strong>{{ rec.wait_condition }}</div>{% endif %}
+          {% if rec.wait_price %}<div style="font-size:.8rem;"><strong>观察价：</strong>${{ "%.2f"|format(rec.wait_price) }}</div>{% endif %}
+          {% if rec.notes %}<div class="mt-2 text-muted" style="font-size:.8rem;white-space:pre-line;">{{ rec.notes }}</div>{% endif %}
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="text-muted text-center py-4">
+          这是长桥持仓/历史交易标的，目前还没有对应的选标记录。
+          <div class="mt-2"><a href="{{ url_for('add') }}" class="btn btn-success btn-sm">补充研究记录</a></div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

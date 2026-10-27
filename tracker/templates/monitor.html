@@ -2,24 +2,71 @@
 {% block title %}监控中心{% endblock %}
 
 {% block content %}
+
+{%- macro cat_card(r) %}
+<a href="{{ url_for('catalyst_detail', cat_id=r.id) }}"
+   class="catalyst-card {{ 'catalyst-happened' if r.status == 'happened' else ('catalyst-skipped' if r.status == 'skipped' else 'catalyst-upcoming') }} mb-2 d-block">
+  <div class="d-flex justify-content-between align-items-start">
+    <div class="flex-grow-1">
+      <div class="d-flex align-items-center gap-2 mb-1">
+        <span class="catalyst-type-badge catalyst-type-{{ r.event_type }}">{{ r.type_label }}</span>
+        <span class="fw-semibold" style="font-size:.9rem;">{{ r.title }}</span>
+      </div>
+      {% if r.tickers %}
+      <div class="d-flex flex-wrap gap-1 mb-1">
+        {% for t in r.tickers %}
+        <span class="theme-badge">{{ t.ticker }}
+          {% if t.pct_from_entry is not none %}
+          <span class="{{ 'pct-pos' if t.pct_from_entry >= 0 else 'pct-neg' }}" style="font-size:.7rem;">{{ '%+.1f'|format(t.pct_from_entry) }}%</span>
+          {% endif %}
+        </span>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if r.description %}
+      <div class="text-muted" style="font-size:.78rem;">{{ r.description[:100] }}</div>
+      {% endif %}
+      <div class="text-muted mt-1" style="font-size:.7rem;">
+        来源：{{ r.source_name or '手动维护' }}{% if r.last_checked_at %} · 校验 {{ r.last_checked_at[:10] }}{% endif %}
+      </div>
+    </div>
+    <div class="text-end" style="min-width:75px;">
+      <div style="font-size:.75rem; color:var(--text-muted);">{{ r.event_date }}</div>
+      {% if r.days_until is not none %}
+      <div class="{% if r.days_until < 0 %}text-danger{% elif r.days_until <= 3 %}text-warning{% else %}text-muted{% endif %}" style="font-size:.72rem;">
+        {% if r.days_until == 0 %}今天
+        {% elif r.days_until == 1 %}明天
+        {% elif r.days_until < 0 %}{{ -r.days_until }}天前
+        {% else %}{{ r.days_until }}天后{% endif %}
+      </div>
+      {% endif %}
+      {% if r.status == 'happened' %}<span class="status-happened" style="font-size:.72rem;">已发生</span>
+      {% elif r.status == 'skipped' %}<span class="status-skipped" style="font-size:.72rem;">已跳过</span>{% endif %}
+    </div>
+  </div>
+</a>
+{%- endmacro %}
+
+<!-- Header -->
 <div class="d-flex justify-content-between align-items-center mb-4">
   <div>
     <h5 class="fw-bold mb-0">监控中心</h5>
     <div class="text-muted" style="font-size:.85rem;">
-      {{ all_count }} 个价格监控 · {{ catalyst_count }} 个催化剂 · 今日待行动 {{ triggered|length }} 个
+      {{ all_count }} 个个股监控 · {{ sector_monitors|length }} 个板块监控 · {{ macro_count }} 个宏观事件
     </div>
   </div>
   <div class="d-flex gap-2 align-items-center">
-    {% if catalyst_rows %}
-    <button id="syncBtn" class="btn btn-outline-secondary btn-sm" onclick="syncEarnings()">
-      <i class="bi bi-cloud-download me-1"></i>同步财报
-    </button>
-    {% endif %}
     <a href="{{ url_for('catalyst_add') }}" class="btn btn-success btn-sm">
-      <i class="bi bi-plus-circle me-1"></i>添加催化剂
+      <i class="bi bi-plus-circle me-1"></i>添加事件
     </a>
+    <button id="syncBtn" class="btn btn-outline-secondary btn-sm" onclick="syncEarnings()">
+      <i class="bi bi-cloud-download me-1"></i>同步未来事件
+    </button>
     <button id="refreshBtn" class="btn btn-outline-secondary btn-sm" onclick="refreshPrices()">
       <i class="bi bi-arrow-clockwise me-1"></i>刷新价格
+    </button>
+    <button id="aiRefreshBtn" class="btn btn-outline-primary btn-sm" onclick="refreshAiInfra()">
+      <i class="bi bi-layers me-1"></i>刷新板块信号
     </button>
   </div>
 </div>
@@ -27,200 +74,61 @@
 <!-- Tabs -->
 <ul class="nav nav-tabs mb-4" id="monitorTabs" role="tablist">
   <li class="nav-item" role="presentation">
-    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-all" type="button"
-            role="tab"><i class="bi bi-grid me-1"></i>全部</button>
+    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-price" type="button" role="tab">
+      <i class="bi bi-graph-up me-1"></i>价格监控
+      {% if triggered or revalidate %}<span class="badge bg-danger rounded-pill ms-1">{{ triggered|length + revalidate|length }}</span>{% endif %}
+    </button>
   </li>
   <li class="nav-item" role="presentation">
-    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-price" type="button"
-            role="tab"><i class="bi bi-graph-up me-1"></i>价格监控
-      <span class="badge bg-secondary rounded-pill ms-1">{{ all_count }}</span></button>
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-sector" type="button" role="tab" id="sectorTabBtn">
+      <i class="bi bi-layers me-1"></i>板块信号
+      <span class="badge bg-secondary rounded-pill ms-1">{{ sector_monitors|length }}</span>
+    </button>
   </li>
   <li class="nav-item" role="presentation">
-    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-catalyst" type="button"
-            role="tab"><i class="bi bi-lightning me-1"></i>催化剂
-      <span class="badge bg-secondary rounded-pill ms-1">{{ catalyst_count }}</span></button>
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-macro" type="button" role="tab" id="macroTabBtn">
+      <i class="bi bi-calendar-event me-1"></i>宏观事件
+      <span class="badge bg-secondary rounded-pill ms-1">{{ cat_this_week|length + cat_this_month|length + cat_later|length + cat_overdue|length }}</span>
+    </button>
   </li>
 </ul>
 
 <div class="tab-content">
 
-<!-- ═══════════════════ TAB 1: 全部（聚合概览） ═══════════════════ -->
-<div class="tab-pane fade show active" id="tab-all" role="tabpanel">
-  <!-- 紧急提醒 -->
-  {% if triggered %}
-  <div class="mb-3">
-    <div class="divider-label text-danger fw-bold"><i class="bi bi-exclamation-triangle-fill me-1"></i>紧急：到价可行动 ({{ triggered|length }})</div>
-    {% for r in triggered %}
-    <div class="monitor-card monitor-card-triggered mb-2 p-2">
-      <div class="d-flex justify-content-between align-items-center mb-2">
-        <div>
-          <strong>{{ r.ticker }}</strong>
-          <span class="text-muted ms-2" style="font-size:.82rem;">
-            目标 ${{ "%.2f"|format(r.wait_price) }} · 当前 ${{ "%.2f"|format(r.latest_price) }}
-          </span>
-          {% if r.monitor_status == 'triggered' %}
-          <span class="badge bg-danger ms-1" style="font-size:.7rem;">待操作</span>
-          {% endif %}
-        </div>
-        <a href="{{ url_for('detail', rec_id=r.id) }}" class="btn btn-sm btn-outline-secondary">详情</a>
-      </div>
-      <!-- 操作按钮组 -->
-      <div class="d-flex flex-wrap gap-1 mt-1">
-        <!-- 买入 -->
-        <form method="post" action="{{ url_for('monitor_action', rec_id=r.id) }}" class="d-inline"
-              onsubmit="return confirmBuy('{{ r.ticker }}', {{ r.latest_price or r.wait_price }})">
-          <input type="hidden" name="action" value="bought">
-          <input type="hidden" name="buy_type" value="real">
-          <input type="hidden" name="buy_price" id="bp_{{ r.id }}" value="{{ r.latest_price or r.wait_price }}">
-          <button type="submit" class="btn btn-sm btn-success"><i class="bi bi-cart-plus me-1"></i>实盘买入</button>
-        </form>
-        <form method="post" action="{{ url_for('monitor_action', rec_id=r.id) }}" class="d-inline"
-              onsubmit="return confirmBuy('{{ r.ticker }}', {{ r.latest_price or r.wait_price }})">
-          <input type="hidden" name="action" value="bought">
-          <input type="hidden" name="buy_type" value="paper">
-          <input type="hidden" name="buy_price" value="{{ r.latest_price or r.wait_price }}">
-          <button type="submit" class="btn btn-sm btn-outline-success"><i class="bi bi-eye me-1"></i>模拟买入</button>
-        </form>
-        <!-- 跳过 -->
-        <div class="dropdown d-inline">
-          <button class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">
-            <i class="bi bi-skip-forward me-1"></i>跳过
-          </button>
-          <ul class="dropdown-menu dropdown-menu-dark">
-            {% for rk, rv in monitor_action_reasons.items() %}
-            {% if rk != 'price_adjusted' and rk != 'manual' %}
-            <li><form method="post" action="{{ url_for('monitor_action', rec_id=r.id) }}" class="dropdown-item p-0" style="display:block;">
-              <input type="hidden" name="action" value="skipped">
-              <input type="hidden" name="reason" value="{{ rk }}">
-              <button type="submit" class="dropdown-item text-wrap">{{ rv }}</button>
-            </form></li>
-            {% endif %}
-            {% endfor %}
-            <li><hr class="dropdown-divider"></li>
-            <li><form method="post" action="{{ url_for('monitor_action', rec_id=r.id) }}" class="dropdown-item p-0" style="display:block;">
-              <input type="hidden" name="action" value="skipped">
-              <input type="hidden" name="reason" value="manual">
-              <input type="hidden" name="note" value="">
-              <button type="submit" class="dropdown-item text-wrap">其他原因...</button>
-            </form></li>
-          </ul>
-        </div>
-        <!-- 继续观察 -->
-        <form method="post" action="{{ url_for('monitor_action', rec_id=r.id) }}" class="d-inline">
-          <input type="hidden" name="action" value="continue">
-          <button type="submit" class="btn btn-sm btn-outline-info"><i class="bi bi-clock me-1"></i>继续等</button>
-        </form>
-      </div>
-    </div>
-    {% endfor %}
-  </div>
-  {% endif %}
+<!-- ═══ TAB 1: 价格监控 ═══ -->
+<div class="tab-pane fade show active" id="tab-price" role="tabpanel">
 
-  <!-- 即将发生的催化剂（未来7天） -->
-  {% if upcoming_catalysts %}
-  <div class="mb-3">
-    <div class="divider-label"><i class="bi bi-lightning me-1"></i>近期催化剂 ({{ upcoming_catalysts|length }})</div>
-    {% for c in upcoming_catalysts %}
-    <a href="{{ url_for('catalyst_detail', cat_id=c.id) }}"
-       class="catalyst-card {{ 'catalyst-happened' if c.status == 'happened' else ('catalyst-skipped' if c.status == 'skipped' else 'catalyst-upcoming') }} mb-2 d-block">
-      <div class="d-flex justify-content-between align-items-start">
-        <div>
-          <div class="d-flex align-items-center gap-2 mb-1">
-            <span class="catalyst-type-badge catalyst-type-{{ c.event_type }}">{{ c.type_label }}</span>
-            <span class="fw-semibold" style="font-size:.88rem;">{{ c.title }}</span>
-          </div>
-          {% if c.tickers %}
-          <div class="d-flex flex-wrap gap-1">
-            {% for t in c.tickers %}
-            <span class="theme-badge">{{ t.ticker }}</span>
-            {% endfor %}
-          </div>
-          {% endif %}
+{% if revalidate %}
+<div class="mb-4">
+  <div class="divider-label">需要复核 ({{ revalidate|length }})</div>
+  {% for r in revalidate %}
+  <div class="monitor-card mb-2" style="border-left:3px solid var(--red,#dc3545);">
+    <div class="d-flex justify-content-between align-items-start gap-3">
+      <div>
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <span class="expiry-past">待复核</span>
+          <a href="{{ url_for('detail', rec_id=r.id) }}" class="fw-bold">{{ r.ticker }}</a>
+          <span class="direction-badge {{ 'direction-up' if r.monitor_direction == 'breakout' else 'direction-down' }}">{{ r.monitor_direction_label }}</span>
         </div>
-        <div class="text-end">
-          <span style="font-size:.8rem; color:var(--text-muted);">{{ c.event_date }}</span>
-          {% if c.days_until > -1 and c.days_until is not none %}
-          <div class="{% if c.days_until <= 0 %}text-danger{% elif c.days_until <= 3 %}text-warning{% else %}text-muted{% endif %}" style="font-size:.75rem;">
-            {% if c.days_until == 0 %}今天
-            {% elif c.days_until == 1 %}明天
-            {% else %}{{ c.days_until }}天后{% endif %}
-          </div>
-          {% endif %}
-        </div>
+        <div style="font-size:.82rem;">{{ r.monitor_reason }}</div>
+        <div class="text-muted mt-1" style="font-size:.75rem;">最后行情：{{ r.latest_date or '未知' }}{% if r.wait_price %} · 目标 ${{ '%.2f'|format(r.wait_price) }}{% elif r.stop_loss_price %} · 止损 ${{ '%.2f'|format(r.stop_loss_price) }}{% endif %}</div>
       </div>
-    </a>
-    {% endfor %}
-  </div>
-  {% endif %}
-
-  <!-- 远期监控摘要 -->
-  {% if watching %}
-  <div class="mb-3">
-    <div class="divider-label"><i class="bi bi-eye me-1"></i>远期价格监控 ({{ watching|length }})</div>
-    <div class="card">
-      <div class="table-responsive">
-        <table class="table table-hover mb-0" style="font-size:.85rem;">
-          <thead><tr><th>股票</th><th>方向</th><th>目标价</th><th>当前价</th><th>距目标</th></tr></thead>
-          <tbody>
-            {% for r in watching[:10] %}
-            <tr style="cursor:pointer;" onclick="location.href='{{ url_for('detail', rec_id=r.id) }}'">
-              <td class="fw-bold">{{ r.ticker }}</td>
-              <td>
-                {% if r.wait_price and r.wait_price > r.entry_price %}
-                <span class="direction-badge direction-up">突破</span>
-                {% else %}
-                <span class="direction-badge direction-down">回落</span>
-                {% endif %}
-              </td>
-              <td>${{ "%.2f"|format(r.wait_price or 0) }}</td>
-              <td>{% if r.latest_price %}${{ "%.2f"|format(r.latest_price) }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
-              <td>
-                {% if r.latest_price and r.wait_price %}
-                {% set gap = (r.latest_price - r.wait_price) / r.wait_price * 100 %}
-                <span class="{{ 'pct-pos' if gap > 0 else 'pct-neg' }}">{{ "%+.1f"|format(gap) }}%</span>
-                {% else %}<span class="text-muted">—</span>{% endif %}
-              </td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% if watching|length > 10 %}
-      <div class="text-center py-2 border-top">
-        <a href="#tab-price" data-bs-toggle="tab" class="text-muted" style="font-size:.82rem;">查看全部 {{ watching|length }} 条 →</a>
-      </div>
-      {% endif %}
+      <a href="{{ url_for('detail', rec_id=r.id) }}" class="btn btn-sm btn-outline-secondary">重新评估</a>
     </div>
   </div>
-  {% endif %}
-
-  {% if not triggered and not upcoming_catalysts and not watching %}
-  <div class="card">
-    <div class="empty-state py-5">
-      <i class="bi bi-inbox d-block mb-2" style="font-size:2rem;opacity:.3;"></i>
-      <div style="font-size:.9rem;">暂无监控内容</div>
-      <div class="text-muted mt-1" style="font-size:.82rem;">
-        设置推荐等待价或添加催化剂后，这里会显示聚合信息
-      </div>
-    </div>
-  </div>
-  {% endif %}
+  {% endfor %}
 </div>
+{% endif %}
 
-
-<!-- ═══════════════════ TAB 2: 价格监控 ═══════════════════ -->
-<div class="tab-pane fade" id="tab-price" role="tabpanel">
-
-<!-- TRIGGERED: within 3% of wait_price -->
 {% if triggered %}
 <div class="mb-4">
-  <div class="divider-label">到价可行动 ({{ triggered|length }})</div>
+  <div class="divider-label">条件已触发，等待确认 ({{ triggered|length }})</div>
   {% for r in triggered %}
   <div class="monitor-card monitor-card-triggered mb-3">
     <div class="d-flex justify-content-between align-items-start">
       <div class="flex-grow-1">
         <div class="d-flex align-items-center gap-2 mb-2">
-          <span class="triggered-badge">已到价</span>
+          <span class="triggered-badge">待确认</span>
           <span style="font-size:1.2rem; font-weight:800;">{{ r.ticker }}</span>
           <span class="text-muted" style="font-size:.78rem;">{{ r.framework_name }}</span>
           {% if r.monitoring %}<span class="monitor-badge">监控中</span>{% endif %}
@@ -237,47 +145,19 @@
           <div class="col-auto">
             <span class="text-muted">距目标</span>
             {% set gap = (r.latest_price - r.wait_price) / r.wait_price * 100 %}
-            <span class="{{ 'pct-pos' if gap > 0 else 'pct-neg' }}" style="font-size:1rem;">
-              {{ "%+.1f"|format(gap) }}%
-            </span>
+            <span class="{{ 'pct-pos' if gap > 0 else 'pct-neg' }}" style="font-size:1rem;">{{ "%+.1f"|format(gap) }}%</span>
           </div>
           <div class="col-auto">
             <span class="text-muted">信心度</span>
-            {% for i in range(5) %}
-            <i class="bi bi-star-fill {{ 'conviction-star' if i < r.conviction else 'conviction-empty' }}"></i>
-            {% endfor %}
+            {% for i in range(5) %}<i class="bi bi-star-fill {{ 'conviction-star' if i < r.conviction else 'conviction-empty' }}"></i>{% endfor %}
           </div>
         </div>
+        <div class="mb-2" style="font-size:.82rem;"><i class="bi bi-info-circle me-1"></i>{{ r.monitor_reason }}</div>
         {% if r.wait_condition %}
-        <div class="mb-2" style="font-size:.82rem; color:var(--text-muted);">
-          <i class="bi bi-flag me-1"></i>{{ r.wait_condition }}
-        </div>
+        <div class="mb-2" style="font-size:.82rem; color:var(--text-muted);"><i class="bi bi-flag me-1"></i>{{ r.wait_condition }}</div>
         {% endif %}
-        <div class="d-flex gap-2 flex-wrap align-items-center">
-          <div class="action-cmd" id="cmd-{{ r.id }}">
-            <code>longbridge order buy {{ r.ticker }}.{{ r.market }} --price {{ "%.2f"|format(r.wait_price) }} --tif gtc</code>
-            <button class="btn btn-sm btn-outline-secondary ms-2" onclick="copyCmd({{ r.id }})" title="复制命令">
-              <i class="bi bi-clipboard"></i>
-            </button>
-          </div>
-          <a href="{{ url_for('detail', rec_id=r.id) }}" class="btn btn-sm btn-outline-secondary">
-            <i class="bi bi-box-arrow-up-right me-1"></i>详情
-          </a>
-        </div>
-        <!-- 闭环操作按钮 -->
+        <a href="{{ url_for('detail', rec_id=r.id) }}" class="btn btn-sm btn-warning"><i class="bi bi-search me-1"></i>复核逻辑与量价</a>
         <div class="d-flex flex-wrap gap-1 mt-2 pt-2 border-top" style="border-color:var(--border) !important;">
-          <form method="post" action="{{ url_for('monitor_action', rec_id=r.id) }}" class="d-inline"
-                onsubmit="return confirmBuy('{{ r.ticker }}', {{ r.latest_price or r.wait_price }})">
-            <input type="hidden" name="action" value="bought"><input type="hidden" name="buy_type" value="real">
-            <input type="hidden" name="buy_price" value="{{ r.latest_price or r.wait_price }}">
-            <button type="submit" class="btn btn-sm btn-success"><i class="bi bi-cart-plus me-1"></i>实盘买</button>
-          </form>
-          <form method="post" action="{{ url_for('monitor_action', rec_id=r.id) }}" class="d-inline"
-                onsubmit="return confirmBuy('{{ r.ticker }}', {{ r.latest_price or r.wait_price }})">
-            <input type="hidden" name="action" value="bought"><input type="hidden" name="buy_type" value="paper">
-            <input type="hidden" name="buy_price" value="{{ r.latest_price or r.wait_price }}">
-            <button type="submit" class="btn btn-sm btn-outline-success"><i class="bi bi-eye me-1"></i>模拟买</button>
-          </form>
           <form method="post" action="{{ url_for('monitor_action', rec_id=r.id) }}" class="d-inline">
             <input type="hidden" name="action" value="skipped"><input type="hidden" name="reason" value="logic_changed">
             <button type="submit" class="btn btn-sm btn-outline-secondary">跳过</button>
@@ -294,39 +174,24 @@
 </div>
 {% endif %}
 
-<!-- APPROACHING: within 10% of wait_price -->
 {% if approaching %}
 <div class="mb-4">
   <div class="divider-label">接近目标 ({{ approaching|length }})</div>
   <div class="card">
     <div class="table-responsive">
       <table class="table table-hover mb-0">
-        <thead>
-          <tr>
-            <th>股票</th><th>方向</th><th>目标价</th><th>当前价</th><th>距目标</th><th>信心</th><th>条件</th><th>监控</th>
-          </tr>
-        </thead>
+        <thead><tr><th>股票</th><th>方向</th><th>目标价</th><th>当前价</th><th>距目标</th><th>信心</th><th>条件</th><th>监控</th></tr></thead>
         <tbody>
           {% for r in approaching %}
           <tr style="cursor:pointer;" onclick="location.href='{{ url_for('detail', rec_id=r.id) }}'">
             <td><a href="{{ url_for('detail', rec_id=r.id) }}" class="fw-bold">{{ r.ticker }}</a><small class="text-muted ms-1">{{ r.framework_name }}</small></td>
-            <td>
-              {% if r.wait_price > r.entry_price %}
-              <span class="direction-badge direction-up">突破</span>
-              {% else %}
-              <span class="direction-badge direction-down">回落</span>
-              {% endif %}
-            </td>
+            <td><span class="direction-badge {{ 'direction-up' if r.monitor_direction == 'breakout' else 'direction-down' }}">{{ r.monitor_direction_label }}</span></td>
             <td><strong style="color:var(--yellow);">${{ "%.2f"|format(r.wait_price) }}</strong></td>
             <td>${{ "%.2f"|format(r.latest_price) }}</td>
             <td>{% set gap = (r.latest_price - r.wait_price) / r.wait_price * 100 %}<span class="{{ 'pct-pos' if gap > 0 else 'pct-neg' }}">{{ "%+.1f"|format(gap) }}%</span></td>
             <td>{% for i in range(5) %}<i class="bi bi-star-fill {{ 'conviction-star' if i < r.conviction else 'conviction-empty' }}" style="font-size:.7rem;"></i>{% endfor %}</td>
-            <td style="font-size:.78rem;color:var(--text-muted);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ r.wait_condition or '—' }}</td>
-            <td>
-              <form method="post" action="{{ url_for('toggle_monitor', rec_id=r.id) }}">
-                <button type="submit" class="btn btn-sm {{ 'btn-warning' if r.monitoring else 'btn-outline-secondary' }}">{{ '开启' if not r.monitoring else '关闭' }}</button>
-              </form>
-            </td>
+            <td style="font-size:.78rem;color:var(--text-muted);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ r.wait_condition or '—' }}</td>
+            <td><form method="post" action="{{ url_for('toggle_monitor', rec_id=r.id) }}"><button type="submit" class="btn btn-sm {{ 'btn-warning' if r.monitoring else 'btn-outline-secondary' }}">{{ '关闭' if r.monitoring else '开启' }}</button></form></td>
           </tr>
           {% endfor %}
         </tbody>
@@ -336,45 +201,24 @@
 </div>
 {% endif %}
 
-<!-- WATCHING: far from target -->
 {% if watching %}
 <div class="mb-4">
   <div class="divider-label">远期监控 ({{ watching|length }})</div>
   <div class="card">
     <div class="table-responsive">
       <table class="table table-hover mb-0">
-        <thead>
-          <tr>
-            <th>股票</th><th>方向</th><th>入场价</th><th>目标价</th><th>当前价</th><th>距目标</th><th>有效期</th><th>监控</th>
-          </tr>
-        </thead>
+        <thead><tr><th>股票</th><th>方向</th><th>入场价</th><th>目标价</th><th>当前价</th><th>距目标</th><th>有效期</th><th>监控</th></tr></thead>
         <tbody>
           {% for r in watching %}
           <tr style="cursor:pointer;" onclick="location.href='{{ url_for('detail', rec_id=r.id) }}'">
             <td><a href="{{ url_for('detail', rec_id=r.id) }}" class="fw-bold">{{ r.ticker }}</a><small class="text-muted ms-1">{{ r.framework_name }}</small></td>
-            <td>
-              {% if r.wait_price and r.wait_price > r.entry_price %}
-              <span class="direction-badge direction-up">突破</span>
-              {% else %}
-              <span class="direction-badge direction-down">回落</span>
-              {% endif %}
-            </td>
+            <td><span class="direction-badge {{ 'direction-up' if r.monitor_direction == 'breakout' else 'direction-down' }}">{{ r.monitor_direction_label }}</span></td>
             <td style="font-size:.82rem;">${{ "%.2f"|format(r.entry_price) }}</td>
             <td><strong style="color:var(--yellow);">${{ "%.2f"|format(r.wait_price or 0) }}</strong></td>
             <td style="font-size:.82rem;">{% if r.latest_price %}${{ "%.2f"|format(r.latest_price) }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
             <td>{% if r.latest_price and r.wait_price %}{% set gap = (r.latest_price - r.wait_price) / r.wait_price * 100 %}<span class="{{ 'pct-pos' if gap > 0 else 'pct-neg' }}">{{ "%+.1f"|format(gap) }}%</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
-            <td>
-              {% if r.validity_date %}
-              <span style="font-size:.78rem;">{{ r.validity_date }}</span>
-              {% if r.is_expired_validity %}<span class="expiry-past">已过期</span>
-              {% elif r.is_expiring_soon %}<span class="expiry-soon">{{ r.days_until_expiry }}天</span>{% endif %}
-              {% else %}<span class="text-muted" style="font-size:.78rem;">无限期</span>{% endif %}
-            </td>
-            <td>
-              <form method="post" action="{{ url_for('toggle_monitor', rec_id=r.id) }}">
-                <button type="submit" class="btn btn-sm {{ 'btn-warning' if r.monitoring else 'btn-outline-secondary' }}">{{ '开启' if not r.monitoring else '关闭' }}</button>
-              </form>
-            </td>
+            <td>{% if r.validity_date %}<span style="font-size:.78rem;">{{ r.validity_date }}</span>{% if r.is_expired_validity %}<span class="expiry-past">已过期</span>{% elif r.is_expiring_soon %}<span class="expiry-soon">{{ r.days_until_expiry }}天</span>{% endif %}{% else %}<span class="text-muted" style="font-size:.78rem;">无限期</span>{% endif %}</td>
+            <td><form method="post" action="{{ url_for('toggle_monitor', rec_id=r.id) }}"><button type="submit" class="btn btn-sm {{ 'btn-warning' if r.monitoring else 'btn-outline-secondary' }}">{{ '关闭' if r.monitoring else '开启' }}</button></form></td>
           </tr>
           {% endfor %}
         </tbody>
@@ -384,7 +228,6 @@
 </div>
 {% endif %}
 
-<!-- EXPIRED validity -->
 {% if expired %}
 <div class="mb-4">
   <div class="divider-label">已过期 ({{ expired|length }})</div>
@@ -409,7 +252,7 @@
 </div>
 {% endif %}
 
-{% if not triggered and not approaching and not watching and not expired %}
+{% if not triggered and not approaching and not watching and not revalidate and not expired %}
 <div class="card">
   <div class="empty-state py-5">
     <i class="bi bi-bell-slash d-block mb-2" style="font-size:2rem;opacity:.3;"></i>
@@ -419,103 +262,287 @@
 </div>
 {% endif %}
 
+{% set upcoming_company = company_events | selectattr('status', 'equalto', 'upcoming') | list %}
+{% if upcoming_company %}
+<div class="mt-4">
+  <div class="divider-label">相关个股事件 ({{ upcoming_company|length }})</div>
+  <div class="row g-2">
+    {% for r in upcoming_company[:6] %}
+    <div class="col-lg-6">{{ cat_card(r) }}</div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
 </div><!-- /tab-price -->
 
 
-<!-- ═══════════════════ TAB 3: 催化剂 ═══════════════════ -->
-<div class="tab-pane fade" id="tab-catalyst" role="tabpanel">
-
-<!-- Filters -->
-<div class="filter-bar mb-3">
-  <form method="get" class="d-flex flex-wrap gap-2 align-items-center">
-    <select name="status" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
-      <option value="">全部状态</option>
-      <option value="upcoming" {{ 'selected' if selected_status == 'upcoming' }}>即将发生</option>
-      <option value="happened" {{ 'selected' if selected_status == 'happened' }}>已发生</option>
-      <option value="skipped" {{ 'selected' if selected_status == 'skipped' }}>已跳过</option>
-    </select>
-    <select name="type" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
-      <option value="">全部类型</option>
-      {% for k, v in catalyst_types.items() %}
-      <option value="{{ k }}" {{ 'selected' if selected_type == k }}>{{ v }}</option>
-      {% endfor %}
-    </select>
-    {% if selected_status or selected_type %}
-    <a href="{{ url_for('monitor') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-x me-1"></i>清除</a>
-    {% endif %}
-    <span class="text-muted ms-auto" style="font-size:.8rem;">共 {{ catalyst_rows|length }} 条</span>
-  </form>
-</div>
-
-{% if catalyst_rows %}
-{% set ns = namespace(last_date='') %}
-{% for r in catalyst_rows %}
-{% if r.event_date != ns.last_date %}
-{% if not loop.first %}</div>{% endif %}
-<div class="mb-3">
-  <div class="divider-label">
-    {% if r.event_date == today %}今天
-    {% elif r.event_date == tomorrow %}明天
-    {% else %}{{ r.event_date }}{% endif %}
-  </div>
-{% set ns.last_date = r.event_date %}
-{% endif %}
-
-  <a href="{{ url_for('catalyst_detail', cat_id=r.id) }}"
-     class="catalyst-card {{ 'catalyst-happened' if r.status == 'happened' else ('catalyst-skipped' if r.status == 'skipped' else 'catalyst-upcoming') }} mb-2 d-block">
-    <div class="d-flex justify-content-between align-items-start">
-      <div class="flex-grow-1">
-        <div class="d-flex align-items-center gap-2 mb-1">
-          <span class="catalyst-type-badge catalyst-type-{{ r.event_type }}">{{ r.type_label }}</span>
-          <span class="fw-semibold" style="font-size:.9rem;">{{ r.title }}</span>
-        </div>
-        {% if r.tickers %}
-        <div class="d-flex flex-wrap gap-1 mb-1">
-          {% for t in r.tickers %}
-          <span class="theme-badge">{{ t.ticker }}</span>
-          {% endfor %}
-        </div>
-        {% endif %}
-        {% if r.description %}
-        <div class="text-muted" style="font-size:.78rem;">{{ r.description[:120] }}</div>
-        {% endif %}
+<!-- ═══ TAB 2: 板块信号 ═══ -->
+<div class="tab-pane fade" id="tab-sector" role="tabpanel">
+{% if sector_monitors %}
+{% for sector in sector_monitors %}
+<div class="monitor-card {{ 'monitor-card-triggered' if sector.signal == 'actionable' else '' }} mb-3">
+  <div class="d-flex justify-content-between align-items-start gap-3 mb-3">
+    <div>
+      <div class="d-flex align-items-center gap-2 mb-1">
+        <span class="{{ 'triggered-badge' if sector.signal == 'actionable' else 'monitor-badge' }}">
+          {{ '条件触发' if sector.signal == 'actionable' else '正常观察' }}
+        </span>
+        <strong style="font-size:1.05rem;">{{ sector.name }}</strong>
+        <span class="text-muted" style="font-size:.75rem;">{{ sector.horizon }}</span>
       </div>
-      <div class="text-end" style="min-width:70px;">
-        {% if r.status == 'upcoming' %}
-        <span class="status-upcoming" style="font-size:.78rem;">待发生</span>
-        {% elif r.status == 'happened' %}
-        <span class="status-happened" style="font-size:.78rem;">已发生</span>
-        {% if r.impact_score %}
-        <div class="mt-1">{% for i in range(5) %}<i class="bi bi-star-fill {{ 'impact-star' if i < r.impact_score else 'impact-empty' }}" style="font-size:.6rem;"></i>{% endfor %}</div>
-        {% endif %}
-        {% else %}
-        <span class="status-skipped" style="font-size:.78rem;">已跳过</span>
-        {% endif %}
+      <div class="text-muted" style="font-size:.82rem;">{{ sector.summary }}</div>
+    </div>
+    <div class="text-end">
+      <div style="font-size:1.5rem;font-weight:800;">{{ sector.score }}/5</div>
+      <div class="text-muted" style="font-size:.72rem;">{{ sector.checked_at }}</div>
+    </div>
+  </div>
+
+  <div class="row g-2 mb-3">
+    {% for c in sector.conditions %}
+    <div class="col-md-6 col-xl-4">
+      <div class="p-2 rounded" style="border:1px solid var(--border);background:{{ 'rgba(25,135,84,.08)' if c.met else 'rgba(108,117,125,.06)' }};font-size:.82rem;">
+        <i class="bi {{ 'bi-check-circle-fill text-success' if c.met else 'bi-circle text-muted' }} me-1"></i>{{ c.label }}
       </div>
     </div>
-  </a>
+    {% endfor %}
+  </div>
 
-{% if loop.last %}</div>{% endif %}
+  <div class="table-responsive">
+    <table class="table table-sm align-middle mb-0">
+      <thead><tr><th>标的</th><th>最新</th><th>MA5</th><th>MA20</th><th>MA60</th><th>3日</th><th>量比(5日)</th><th>三日未新低</th></tr></thead>
+      <tbody>
+      {% for symbol, m in sector.symbols.items() %}
+      <tr>
+        <td class="fw-bold">{{ symbol }}</td>
+        <td>{{ '%.2f'|format(m.last) }}</td>
+        <td class="{{ 'pct-pos' if m.last >= m.ma5 else 'pct-neg' }}">{{ '%.2f'|format(m.ma5) }}</td>
+        <td class="{{ 'pct-pos' if m.last >= m.ma20 else 'pct-neg' }}">{{ '%.2f'|format(m.ma20) }}</td>
+        <td class="{{ 'pct-pos' if m.last >= m.ma60 else 'pct-neg' }}">{{ '%.2f'|format(m.ma60) }}</td>
+        <td class="{{ 'pct-pos' if m.return_3d >= 0 else 'pct-neg' }}">{{ '%+.1f'|format(m.return_3d) }}%</td>
+        <td>{{ '%.2f'|format(m.volume_ratio_5d) if m.volume_ratio_5d is not none else '—' }}</td>
+        <td><i class="bi {{ 'bi-check-circle-fill text-success' if m.no_new_low else 'bi-x-circle-fill text-danger' }}"></i></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="text-muted mt-3" style="font-size:.75rem;">满足至少 3 项才提示第一批 20%–25% 试仓；单日反弹不会自动触发，也不会自动下单。</div>
+</div>
 {% endfor %}
-
 {% else %}
 <div class="card">
   <div class="empty-state py-5">
-    <i class="bi bi-lightning d-block mb-2" style="font-size:2rem;opacity:.3;"></i>
-    <div style="font-size:.9rem;">还没有催化剂记录</div>
-    <div class="text-muted mt-1" style="font-size:.82rem;">跟踪财报日期、政策节点、合同签署等事件</div>
-    <a href="{{ url_for('catalyst_add') }}" class="btn btn-success btn-sm mt-2">添加第一个</a>
+    <i class="bi bi-cpu d-block mb-2" style="font-size:2rem;opacity:.3;"></i>
+    <div style="font-size:.9rem;">尚无板块监控结果</div>
+    <button class="btn btn-outline-primary btn-sm mt-2" onclick="refreshAiInfra()">立即检查 AI 基础设施</button>
   </div>
 </div>
 {% endif %}
 
-</div><!-- /tab-catalyst -->
+{% set upcoming_sector = sector_events | selectattr('status', 'equalto', 'upcoming') | list %}
+{% if upcoming_sector %}
+<div class="mt-4">
+  <div class="divider-label">板块事件 ({{ upcoming_sector|length }})</div>
+  <div class="row g-2">
+    {% for r in upcoming_sector %}<div class="col-lg-6">{{ cat_card(r) }}</div>{% endfor %}
+  </div>
+</div>
+{% endif %}
+</div><!-- /tab-sector -->
+
+
+<!-- ═══ TAB 3: 宏观事件 ═══ -->
+<div class="tab-pane fade" id="tab-macro" role="tabpanel">
+<div class="row g-3">
+  <div class="col-lg-8">
+
+  {% if needs_review %}
+  <div class="mb-3">
+    <div class="divider-label" style="border-left:3px solid var(--orange,#fd7e14);padding-left:.5rem;">
+      <i class="bi bi-exclamation-circle me-1 text-warning"></i>待评估影响 ({{ needs_review|length }})
+    </div>
+    {% for r in needs_review %}{{ cat_card(r) }}{% endfor %}
+  </div>
+  {% endif %}
+
+  {% if cat_overdue %}
+  <div class="mb-3">
+    <div class="divider-label" style="border-left:3px solid var(--red,#dc3545);padding-left:.5rem;">
+      <i class="bi bi-clock-history me-1 text-danger"></i>已过期未标记 ({{ cat_overdue|length }})
+    </div>
+    {% for r in cat_overdue %}{{ cat_card(r) }}{% endfor %}
+  </div>
+  {% endif %}
+
+  {% if cat_this_week %}
+  <div class="mb-3">
+    <div class="divider-label" style="border-left:3px solid var(--blue,#0d6efd);padding-left:.5rem;">
+      <i class="bi bi-lightning me-1"></i>本周 ({{ cat_this_week|length }})
+    </div>
+    {% for r in cat_this_week %}{{ cat_card(r) }}{% endfor %}
+  </div>
+  {% endif %}
+
+  {% if cat_this_month %}
+  <div class="mb-3">
+    <div class="divider-label" style="padding-left:.5rem;">本月 ({{ cat_this_month|length }})</div>
+    {% for r in cat_this_month %}{{ cat_card(r) }}{% endfor %}
+  </div>
+  {% endif %}
+
+  {% if cat_later %}
+  <div class="mb-3">
+    <div class="divider-label" style="padding-left:.5rem;">更远 ({{ cat_later|length }})</div>
+    {% for r in cat_later %}{{ cat_card(r) }}{% endfor %}
+  </div>
+  {% endif %}
+
+  {% if not needs_review and not cat_overdue and not cat_this_week and not cat_this_month and not cat_later %}
+  <div class="card">
+    <div class="empty-state py-5">
+      <i class="bi bi-lightning d-block mb-2" style="font-size:2rem;opacity:.3;"></i>
+      <div style="font-size:.9rem;">还没有宏观事件</div>
+      <a href="{{ url_for('catalyst_add') }}" class="btn btn-success btn-sm mt-2">添加宏观事件</a>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if cat_past %}
+  <details class="mt-3">
+    <summary style="cursor:pointer;font-size:.82rem;color:var(--text-muted);padding:.3rem .5rem;border-left:2px solid var(--border);list-style:none;">
+      <i class="bi bi-clock-history me-1"></i>历史记录 ({{ cat_past|length }})
+    </summary>
+    <div class="mt-2">{% for r in cat_past %}{{ cat_card(r) }}{% endfor %}</div>
+  </details>
+  {% endif %}
+
+  </div><!-- /col-lg-8 -->
+
+  <!-- Mini Calendar -->
+  <div class="col-lg-4">
+    <div class="card p-3" style="position:sticky;top:80px;">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="shiftCal(-1)"><i class="bi bi-chevron-left"></i></button>
+        <span id="calTitle" class="fw-semibold" style="font-size:.88rem;"></span>
+        <button class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="shiftCal(1)"><i class="bi bi-chevron-right"></i></button>
+      </div>
+      <div id="miniCal"></div>
+      <div class="mt-2 d-flex flex-wrap gap-2" style="font-size:.7rem;color:var(--text-muted);">
+        <span><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#6f42c1;"></span> 宏观事件</span>
+        <span><span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#198754;"></span> 除息</span>
+      </div>
+    </div>
+  </div>
+</div><!-- /row -->
+</div><!-- /tab-macro -->
+
 
 </div><!-- /tab-content -->
 {% endblock %}
 
 {% block scripts %}
+<style>
+.monitor-card {
+  border:1px solid var(--border);
+  border-radius:.65rem;
+  background:var(--card-bg);
+  padding:1rem;
+}
+.monitor-card-triggered { border-left:3px solid var(--yellow,#ffc107); }
+.direction-badge { display:inline-flex;align-items:center;padding:.12rem .45rem;border-radius:999px;font-size:.7rem;font-weight:600; }
+.direction-down { background:rgba(13,110,253,.1);color:#0d6efd; }
+.direction-up { background:rgba(25,135,84,.1);color:#198754; }
+.monitor-badge,.triggered-badge { display:inline-flex;padding:.13rem .48rem;border-radius:999px;font-size:.7rem;font-weight:600; }
+.monitor-badge { background:rgba(108,117,125,.12);color:var(--text-muted); }
+.triggered-badge { background:rgba(255,193,7,.18);color:#8a6500; }
+</style>
 <script>
+const CAL_CATALYST = {{ cal_catalyst | tojson }};
+let calOffset = 0;
+let calBuilt  = false;
+
+function buildCalendar() {
+  const el = document.getElementById('miniCal');
+  if (!el) return;
+  const now = new Date();
+  const totalMonth = now.getMonth() + calOffset;
+  const year  = now.getFullYear() + Math.floor(totalMonth / 12);
+  const month = ((totalMonth % 12) + 12) % 12;
+  const d1   = new Date(year, month, 1);
+  const days = new Date(year, month + 1, 0).getDate();
+  document.getElementById('calTitle').textContent =
+    d1.toLocaleDateString('zh-CN', {year:'numeric', month:'long'});
+
+  const evMap = {};
+  CAL_CATALYST.forEach(e => { (evMap[e.date] = evMap[e.date]||[]).push({type:'cat', title:e.title}); });
+  if (window._mktCal) {
+    (window._mktCal.dividends||[]).forEach(e => { const d = (e.ex_date||e.date||'').slice(0,10); if(d) (evMap[d]=evMap[d]||[]).push({type:'div'}); });
+    Object.keys(window._mktCal.closed||{}).forEach(d => { (evMap[d]=evMap[d]||[]).push({type:'closed'}); });
+  }
+
+  const todayStr = new Date().toISOString().slice(0,10);
+  let html = '<table style="width:100%;border-collapse:collapse;table-layout:fixed;">';
+  html += '<tr>' + ['日','一','二','三','四','五','六'].map(d =>
+    `<th style="text-align:center;padding:2px 0;color:var(--text-muted);font-size:.7rem;">${d}</th>`).join('') + '</tr>';
+
+  for (let row = 0; row < 6; row++) {
+    html += '<tr>';
+    for (let col = 0; col < 7; col++) {
+      const dayNum = row * 7 + col - d1.getDay() + 1;
+      if (dayNum < 1 || dayNum > days) { html += '<td></td>'; continue; }
+      const dStr = `${year}-${String(month+1).padStart(2,'0')}-${String(dayNum).padStart(2,'0')}`;
+      const evs  = evMap[dStr] || [];
+      const isToday  = dStr === todayStr;
+      const isClosed = evs.some(e => e.type === 'closed');
+      const tipText  = evs.filter(e=>e.type!=='closed').map(e=>e.title||e.type).join(', ');
+      const numStyle = isToday
+        ? 'display:inline-block;width:20px;height:20px;line-height:20px;border-radius:50%;background:var(--blue,#0d6efd);color:#fff;font-weight:700;font-size:.75rem;'
+        : 'font-size:.78rem;';
+      const dots = evs.filter(e=>e.type!=='closed').slice(0,3).map(e => {
+        const c = e.type==='cat'?'#0d6efd':'#198754';
+        return `<span style="display:inline-block;width:5px;height:5px;border-radius:50%;background:${c};margin:0 1px;"></span>`;
+      }).join('');
+      html += `<td style="padding:2px 1px;text-align:center;${isClosed?'background:rgba(128,128,128,.07);':''}" title="${tipText}">
+        <div style="${numStyle}">${dayNum}</div>
+        <div style="height:7px;display:flex;justify-content:center;align-items:center;">${dots}</div>
+      </td>`;
+    }
+    html += '</tr>';
+    if (row * 7 + 7 - d1.getDay() >= days) break;
+  }
+  html += '</table>';
+  el.innerHTML = html;
+  calBuilt = true;
+}
+
+function shiftCal(dir) { calOffset += dir; buildCalendar(); }
+
+function loadMarketCalendar() {
+  fetch('/api/market_calendar').then(r => r.ok ? r.json() : null).then(data => {
+    if (!data) return;
+    window._mktCal = data;
+    buildCalendar();
+  }).catch(() => {});
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('macroTabBtn');
+  if (btn) {
+    btn.addEventListener('shown.bs.tab', () => {
+      if (!calBuilt) { buildCalendar(); loadMarketCalendar(); }
+    });
+  }
+  if (window.location.hash === '#macro' && btn) {
+    new bootstrap.Tab(btn).show();
+  }
+  const sectorBtn = document.getElementById('sectorTabBtn');
+  if (window.location.hash === '#sector' && sectorBtn) {
+    new bootstrap.Tab(sectorBtn).show();
+  }
+});
+
 function copyCmd(recId) {
   const el = document.getElementById('cmd-' + recId);
   const code = el.querySelector('code').textContent;
@@ -527,7 +554,7 @@ function copyCmd(recId) {
 }
 
 function confirmBuy(ticker, price) {
-  return confirm(`确认买入 ${ticker} @ $${price.toFixed(2)}？`);
+  return confirm(`确认买入 ${ticker} @ $${Number(price).toFixed(2)}？`);
 }
 
 function refreshPrices() {
@@ -539,10 +566,36 @@ function refreshPrices() {
     .then(r => r.json())
     .then(data => {
       btn.innerHTML = '<i class="bi bi-check me-1"></i>已更新 ' + data.updated + ' 条';
-      btn.classList.replace('btn-outline-secondary', 'btn-outline-success');
+      btn.classList.replace('btn-outline-secondary','btn-outline-success');
       setTimeout(() => location.reload(), 800);
     })
     .catch(() => { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>刷新价格'; });
+}
+
+function refreshAiInfra() {
+  const btn = document.getElementById('aiRefreshBtn');
+  const token = document.querySelector('meta[name="csrf-token"]')?.content;
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>计算中...';
+  }
+  fetch('/api/refresh_ai_infra', {
+    method:'POST', headers:{'X-CSRFToken':token}, signal:AbortSignal.timeout(120000)
+  })
+    .then(async r => {
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || '刷新失败');
+      return data;
+    })
+    .then(() => { window.location.href = '/monitor#sector'; window.location.reload(); })
+    .catch(err => {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-exclamation-triangle me-1"></i>' + err.message;
+      } else {
+        alert(err.message);
+      }
+    });
 }
 
 function syncEarnings() {
@@ -551,13 +604,14 @@ function syncEarnings() {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>同步中...';
   fetch('/api/sync_earnings', { method:'POST', headers:{'X-CSRFToken':token}, signal:AbortSignal.timeout(60000) })
-    .then(r => r.json())
+    .then(async r => { const data = await r.json(); if (!r.ok) throw new Error(data.error || '同步失败'); return data; })
     .then(data => {
-      btn.innerHTML = '<i class="bi bi-check me-1"></i>新增 ' + data.added + ' 条';
-      btn.classList.replace('btn-outline-secondary', 'btn-outline-success');
+      const suffix = Object.keys(data.errors || {}).length ? '，部分来源失败' : '';
+      btn.innerHTML = '<i class="bi bi-check me-1"></i>新增 ' + data.added + ' 条' + suffix;
+      btn.classList.replace('btn-outline-secondary','btn-outline-success');
       setTimeout(() => location.reload(), 800);
     })
-    .catch(() => { btn.disabled = false; btn.innerHTML = '<i class="bi bi-cloud-download me-1"></i>同步财报'; });
+    .catch(err => { btn.disabled = false; btn.innerHTML = '<i class="bi bi-exclamation-triangle me-1"></i>' + err.message; });
 }
 </script>
 {% endblock %}

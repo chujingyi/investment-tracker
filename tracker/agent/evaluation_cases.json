@@ -1,0 +1,54 @@
+[
+  {
+    "id": "stale_quote",
+    "input": "原论点需复核；唯一价格来源为30天前快照，没有公告。",
+    "expected_verdict": "insufficient_evidence",
+    "allowed_evidence": [
+      "quote_old"
+    ],
+    "required_evidence": [
+      "quote_old"
+    ],
+    "expected_facts": {}
+  },
+  {
+    "id": "missing_filings",
+    "input": "现价100；未接入公告和财报，问题是公司订单逻辑是否仍成立。",
+    "expected_verdict": "insufficient_evidence",
+    "allowed_evidence": [
+      "quote_1"
+    ],
+    "required_evidence": [],
+    "expected_facts": {}
+  },
+  {
+    "id": "conflicting_sources",
+    "input": "同一报告期营收A来源10，B来源12；口径尚未核实。",
+    "expected_verdict": "needs_review",
+    "allowed_evidence": [
+      "report_a",
+      "report_b"
+    ],
+    "required_evidence": [
+      "report_a",
+      "report_b"
+    ],
+    "expected_facts": {}
+  },
+  {
+    "id": "verified_change",
+    "input": "报告原文营收由100到110，期间和单位一致。仅提取变化，不给买卖判断。",
+    "expected_verdict": "verified_change",
+    "allowed_evidence": [
+      "report_1"
+    ],
+    "required_evidence": [
+      "report_1"
+    ],
+    "expected_facts": {
+      "revenue_before": 100,
+      "revenue_after": 110,
+      "growth_pct": 10
+    }
+  }
+]

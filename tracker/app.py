@@ -1,12 +1,72 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
+from flask import Flask, Response, render_template, request, redirect, url_for, flash, jsonify
 import sqlite3
 import json
-import subprocess
 from datetime import date, datetime, timedelta
+from hmac import compare_digest
 import os
+import threading
+import time
+from collections.abc import Mapping
+from dotenv import load_dotenv
+from flask_wtf.csrf import CSRFProtect
+
+from longbridge_api import LongbridgeClient, LongbridgeNotConfigured
+
+load_dotenv()
 
 app = Flask(__name__)
-app.secret_key = "tracker-2026"
+app.secret_key = os.environ.get("SECRET_KEY", "tracker-2026")
+csrf = CSRFProtect(app)
+API_KEY = os.environ.get("API_KEY")
+API_WRITE_ENDPOINTS = {"api_add_session", "api_add_rec"}
+
+
+@app.before_request
+def require_login():
+    """Protect personal investment data when the app is publicly deployed."""
+    if request.endpoint in {"health", "static"}:
+        return None
+    if request.endpoint in {"api_agent_events_scan", "api_agent_morning_report"}:
+        supplied_key = request.headers.get("X-API-Key", "")
+        if supplied_key:
+            if not API_KEY or not compare_digest(supplied_key, API_KEY):
+                return jsonify({"error": "Unauthorized"}), 401
+            return None
+        csrf.protect()
+    if request.endpoint in API_WRITE_ENDPOINTS:
+        if not API_KEY:
+            return jsonify({"error": "API is not configured"}), 503
+        supplied_key = request.headers.get("X-API-Key", "")
+        if not compare_digest(supplied_key, API_KEY):
+            return jsonify({"error": "Unauthorized"}), 401
+
+    username = os.environ.get("APP_USERNAME")
+    password = os.environ.get("APP_PASSWORD")
+    if not username and not password:
+        if os.environ.get("VERCEL"):
+            return jsonify({"error": "APP_USERNAME and APP_PASSWORD are required"}), 503
+        return None
+    if not username or not password:
+        return jsonify({"error": "Incomplete login configuration"}), 503
+
+    auth = request.authorization
+    valid = (
+        auth
+        and compare_digest(auth.username or "", username)
+        and compare_digest(auth.password or "", password)
+    )
+    if valid:
+        return None
+    return Response(
+        "Authentication required",
+        401,
+        {"WWW-Authenticate": 'Basic realm="Investment Tracker"'},
+    )
+
+
+@app.route("/health")
+def health():
+    return jsonify({"ok": True})
 
 
 def _resolve_db_path():
@@ -28,6 +88,74 @@ def _resolve_db_path():
 
 
 DB_PATH = _resolve_db_path()
+
+
+class _MappingRow(Mapping):
+    """Provide sqlite3.Row-style name and index access for libSQL rows."""
+
+    def __init__(self, columns, values):
+        self._columns = tuple(columns)
+        self._values = tuple(values)
+        self._index = {name: i for i, name in enumerate(self._columns)}
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._values[key]
+        return self._values[self._index[key]]
+
+    def __iter__(self):
+        return iter(self._columns)
+
+    def __len__(self):
+        return len(self._columns)
+
+    def keys(self):
+        return self._columns
+
+
+class _LibsqlCursor:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    @property
+    def _columns(self):
+        return [column[0] for column in (self._cursor.description or [])]
+
+    def _row(self, value):
+        return None if value is None else _MappingRow(self._columns, value)
+
+    def fetchone(self):
+        return self._row(self._cursor.fetchone())
+
+    def fetchall(self):
+        return [self._row(row) for row in self._cursor.fetchall()]
+
+    def __iter__(self):
+        while True:
+            row = self.fetchone()
+            if row is None:
+                return
+            yield row
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+
+class _LibsqlConnection:
+    def __init__(self, connection):
+        self._connection = connection
+
+    def execute(self, sql, parameters=()):
+        return _LibsqlCursor(self._connection.execute(sql, parameters))
+
+    def executemany(self, sql, parameters):
+        return _LibsqlCursor(self._connection.executemany(sql, parameters))
+
+    def executescript(self, script):
+        return _LibsqlCursor(self._connection.executescript(script))
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
 
 FRAMEWORKS = {
     "momentum":    "动量催化框架",
@@ -55,6 +183,7 @@ ENTRY_REC = {
 
 # Badge text without emoji (for table/badge display)
 ENTRY_REC_LABEL = {
+    "actionable": ("可入",     "entry-actionable"),
     "immediate": ("立即可入", "entry-immediate"),
     "wait":      ("等回落",   "entry-wait"),
     "watch":     ("仅观察",   "entry-watch"),
@@ -67,6 +196,120 @@ STATUS_LABEL = {
     "profit":  "已止盈",
     "loss":    "已止损",
 }
+
+LIFECYCLE_LABEL = {
+    "holding": ("持有中", "lifecycle-holding"),
+    "sold": ("历史持仓", "lifecycle-sold"),
+    "watching": ("自选", "lifecycle-watching"),
+    "archived": ("已归档", "lifecycle-archived"),
+}
+
+# Longbridge used the temporary SKHYV code on the first trading day.  Treat
+# both codes as one security throughout the product lifecycle.
+SYMBOL_ALIASES = {"SKHYV.US": "SKHY.US"}
+
+PRIMARY_THEMES = (
+    "宽基指数",
+    "半导体",
+    "光通信与网络",
+    "AI数据中心",
+    "电力与公用事业",
+    "航空航天与国防",
+    "机器人与自动化",
+    "加密资产",
+    "金融",
+    "互联网与消费",
+    "资源与材料",
+)
+
+TICKER_THEME_OVERRIDES = {
+    "QQQM.US": "宽基指数", "VOO.US": "宽基指数", "SQQQ.US": "宽基指数",
+    "NVDA.US": "半导体", "SKHY.US": "半导体", "MU.US": "半导体",
+    "AMKR.US": "半导体", "PLAB.US": "半导体", "VECO.US": "半导体",
+    "AMAT.US": "半导体", "ASML.US": "半导体", "ACLS.US": "半导体",
+    "FORM.US": "半导体", "ENTG.US": "半导体",
+    "COHR.US": "光通信与网络", "LITE.US": "光通信与网络", "FN.US": "光通信与网络",
+    "MTSI.US": "光通信与网络", "MRVL.US": "光通信与网络",
+    "CEG.US": "电力与公用事业", "BE.US": "电力与公用事业", "PWR.US": "电力与公用事业",
+    "ETN.US": "电力与公用事业", "GEV.US": "电力与公用事业",
+    "IREN.US": "AI数据中心", "GOOG.US": "AI数据中心", "VRT.US": "AI数据中心",
+    "RKLB.US": "航空航天与国防", "ASTS.US": "航空航天与国防", "SATS.US": "航空航天与国防",
+    "IRDM.US": "航空航天与国防", "LUNR.US": "航空航天与国防", "SPCX.US": "航空航天与国防",
+    "AVAV.US": "航空航天与国防", "ONDS.US": "航空航天与国防", "JOBY.US": "航空航天与国防",
+    "TSLA.US": "机器人与自动化",
+    "COIN.US": "加密资产", "HOOD.US": "加密资产",
+    "NVA.US": "资源与材料", "BRK.B.US": "金融", "BABA.US": "互联网与消费",
+}
+
+THEME_ROTATION_CONFIG = {
+    "宽基指数": {"proxy": "QQQ.US", "proxy_name": "QQQ"},
+    "半导体": {"proxy": "SMH.US", "proxy_name": "SMH"},
+    "光通信与网络": {"proxy": "XLC.US", "proxy_name": "XLC"},
+    "AI数据中心": {"proxy": "XLK.US", "proxy_name": "XLK"},
+    "电力与公用事业": {"proxy": "XLU.US", "proxy_name": "XLU"},
+    "航空航天与国防": {"proxy": "XLI.US", "proxy_name": "XLI"},
+    "机器人与自动化": {"proxy": "XLK.US", "proxy_name": "XLK"},
+    "加密资产": {"proxy": "IBIT.US", "proxy_name": "IBIT"},
+    "金融": {"proxy": "XLF.US", "proxy_name": "XLF"},
+    "互联网与消费": {"proxy": "XLY.US", "proxy_name": "XLY"},
+    "资源与材料": {"proxy": "XLB.US", "proxy_name": "XLB"},
+}
+
+
+def primary_theme(rec):
+    """Collapse free-form tags into one small, mutually-exclusive theme."""
+    text = " ".join(
+        str(rec.get(key) or "")
+        for key in ("theme", "session_theme", "catalyst", "notes")
+    ).lower()
+    ticker = normalize_symbol(rec.get("ticker"), rec.get("market"))
+    if ticker in TICKER_THEME_OVERRIDES:
+        return TICKER_THEME_OVERRIDES[ticker]
+    for theme in PRIMARY_THEMES:
+        if theme.lower() in text:
+            return theme
+    if "指数" in text or ticker == "QQQM.US":
+        return "宽基指数"
+    if any(key in text for key in ("商业航天", "spacex", "starlink", "卫星")):
+        return "航空航天与国防"
+    if any(key in text for key in ("加密", "crypto")):
+        return "加密资产"
+    if any(key in text for key in ("机器人", "无人机", "evtol", "低空")):
+        return "机器人与自动化"
+    if any(key in text for key in ("光通信", "光互联", "光模块", "cpo", "光子", "inp", "外延片")):
+        return "光通信与网络"
+    if any(key in text for key in ("电力", "核电", "电网", "能源", "sofc", "hvdc")):
+        return "电力与公用事业"
+    if any(key in text for key in ("半导体", "存储", "hbm", "芯片", "晶圆", "探针卡", "离子注入", "先进制程")):
+        return "半导体"
+    if any(key in text for key in ("ai基础设施", "ai基建", "数据中心", "卖铲人")):
+        return "AI数据中心"
+    if any(key in text for key in ("资源", "材料", "矿业", "金属", "煤炭")):
+        return "资源与材料"
+    if any(key in text for key in ("金融", "银行", "保险", "券商")):
+        return "金融"
+    if any(key in text for key in ("互联网", "消费", "电商", "零售")):
+        return "互联网与消费"
+    return "互联网与消费"
+
+
+def normalize_symbol(ticker, market=""):
+    """Convert tracker and broker symbols to one canonical representation."""
+    value = str(ticker or "").strip().upper()
+    if not value:
+        return ""
+    if "." in value:
+        symbol = value
+    else:
+        market = str(market or "US").strip().upper()
+        if market == "CN":
+            market = "SH" if value.startswith(("5", "6", "9")) else "SZ"
+        symbol = f"{value}.{market}"
+    return SYMBOL_ALIASES.get(symbol, symbol)
+
+
+def display_symbol(symbol):
+    return str(symbol or "").rsplit(".", 1)[0]
 
 RISK_LEVEL = {
     "high":   ("高风险", "tag-risk-high"),
@@ -84,33 +327,25 @@ HOLD_PERIOD = {
 
 CATALYST_TYPES = {
     "earnings":  "财报",
+    "dividend":  "分红除息",
+    "split":     "拆股/合股",
+    "ipo":       "IPO",
+    "closed":    "休市",
     "policy":    "政策/法规",
     "product":   "产品发布",
     "contract":  "合同/订单",
     "macro":     "宏观事件",
     "fed":       "美联储",
-    "dividend":  "除权除息",
-    "ipo":       "IPO/新股",
-    "split":     "拆股/合股",
-    "closed":    "休市",
     "other":     "其他",
 }
 
-# ── Monitor lifecycle states ──────────────────────────────────────
-MONITOR_STATUS = {
-    "idle":      "待监控",
-    "active":    "监控中",
-    "triggered": "到价待操作",
-    "bought":    "已买入",
-    "skipped":   "已跳过",
-}
-
 MONITOR_ACTION_REASONS = {
-    "logic_changed":  "逻辑变了",
-    "not_interested": "不感兴趣",
-    "priority_change":"资金优先给别的",
-    "price_adjusted": "调价继续观察",
-    "manual":         "手动停止",
+    "logic_changed":  "逻辑已改变",
+    "too_expensive":  "价格太贵",
+    "better_opp":     "有更好机会",
+    "risk_too_high":  "风险过高",
+    "price_adjusted": "调整目标价",
+    "manual":         "其他原因",
 }
 
 KB_CATEGORIES = {
@@ -147,8 +382,30 @@ FUNDAMENTAL_SIGNALS = [
 
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    test_db_path = os.environ.get("TEST_DATABASE_PATH")
+    turso_url = None if test_db_path else os.environ.get("TURSO_DATABASE_URL")
+    if turso_url:
+        from service_support import configure_tls_trust
+        configure_tls_trust()
+        import libsql
+
+        token = os.environ.get("TURSO_AUTH_TOKEN")
+        if not token:
+            raise RuntimeError("TURSO_AUTH_TOKEN is required with TURSO_DATABASE_URL")
+        conn = _LibsqlConnection(
+            libsql.connect(database=turso_url, auth_token=token)
+        )
+    else:
+        conn = sqlite3.connect(test_db_path or DB_PATH)
+        conn.row_factory = sqlite3.Row
+        # Web + Worker write the same local DB; WAL + busy_timeout avoid
+        # "database is locked" under concurrent read/write.
+        try:
+            conn.execute("PRAGMA busy_timeout = 5000")
+            conn.execute("PRAGMA journal_mode = WAL")
+        except sqlite3.DatabaseError:
+            pass
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -216,6 +473,75 @@ def init_db():
             pct_change REAL,
             FOREIGN KEY (recommendation_id) REFERENCES recommendations(id)
         );
+
+        CREATE TABLE IF NOT EXISTS catalysts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            event_date DATE NOT NULL,
+            description TEXT DEFAULT '',
+            status TEXT DEFAULT 'pending',
+            impact_score REAL,
+            impact_notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS catalyst_tickers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            catalyst_id INTEGER NOT NULL,
+            ticker TEXT NOT NULL,
+            price_before REAL,
+            price_after REAL,
+            pct_change REAL,
+            FOREIGN KEY (catalyst_id) REFERENCES catalysts(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS macro_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            thesis TEXT DEFAULT '',
+            related_tickers TEXT DEFAULT '',
+            review_dates TEXT DEFAULT '',
+            status TEXT DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS ai_infra_monitor (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            checked_at TEXT NOT NULL,
+            signal TEXT NOT NULL DEFAULT 'wait',
+            score INTEGER NOT NULL DEFAULT 0,
+            summary TEXT NOT NULL DEFAULT '',
+            data_json TEXT NOT NULL DEFAULT '{}'
+        );
+
+        CREATE TABLE IF NOT EXISTS broker_positions (
+            symbol TEXT PRIMARY KEY,
+            original_symbol TEXT NOT NULL,
+            name TEXT DEFAULT '',
+            quantity REAL NOT NULL DEFAULT 0,
+            available_quantity REAL NOT NULL DEFAULT 0,
+            cost_price REAL,
+            last_price REAL,
+            currency TEXT DEFAULT '',
+            market TEXT DEFAULT '',
+            synced_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS broker_executions (
+            trade_key TEXT PRIMARY KEY,
+            trade_id TEXT DEFAULT '',
+            order_id TEXT DEFAULT '',
+            symbol TEXT NOT NULL,
+            original_symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            quantity REAL NOT NULL,
+            price REAL NOT NULL,
+            trade_done_at TEXT NOT NULL,
+            synced_at TEXT NOT NULL
+        );
     """)
     # Migrate existing table if missing new columns
     existing = {row[1] for row in conn.execute("PRAGMA table_info(recommendations)")}
@@ -232,62 +558,320 @@ def init_db():
         "validity_date": "DATE",
         "monitoring": "INTEGER DEFAULT 0",
         "is_paper": "INTEGER DEFAULT 0",
+        "monitor_direction": "TEXT DEFAULT ''",
+        "monitor_state": "TEXT DEFAULT 'tracking'",
     }
     for col, coldef in new_cols.items():
         if col not in existing:
             conn.execute(f"ALTER TABLE recommendations ADD COLUMN {col} {coldef}")
-    # ── Migrate catalysts: add meta column ──
-    cat_existing = {row[1] for row in conn.execute("PRAGMA table_info(catalysts)")}
-    if "meta" not in cat_existing:
-        conn.execute("ALTER TABLE catalysts ADD COLUMN meta TEXT DEFAULT '{}'")
-    # ── Wave config table for rotation radar ──
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS wave_config (
+    conn.commit()
+
+    position_existing = {row[1] for row in conn.execute("PRAGMA table_info(broker_positions)")}
+    if "last_price" not in position_existing:
+        conn.execute("ALTER TABLE broker_positions ADD COLUMN last_price REAL")
+        conn.commit()
+
+    catalyst_existing = {row[1] for row in conn.execute("PRAGMA table_info(catalysts)")}
+    catalyst_cols = {
+        "event_scope": "TEXT DEFAULT ''",
+        "source_name": "TEXT DEFAULT '手动维护'",
+        "source_url": "TEXT DEFAULT ''",
+        "external_id": "TEXT DEFAULT ''",
+        "last_checked_at": "TEXT DEFAULT ''",
+    }
+    for col, coldef in catalyst_cols.items():
+        if col not in catalyst_existing:
+            conn.execute(f"ALTER TABLE catalysts ADD COLUMN {col} {coldef}")
+    conn.commit()
+
+    # Notifications table
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            wave_num INTEGER NOT NULL UNIQUE,
-            name TEXT NOT NULL,
-            icon TEXT NOT NULL DEFAULT 'bi-arrow-repeat',
-            category TEXT NOT NULL DEFAULT '',
-            status TEXT NOT NULL DEFAULT 'idle',
-            progress_pct INTEGER DEFAULT 0,
-            tickers TEXT DEFAULT '[]',
-            signal_text TEXT DEFAULT '',
-            action_type TEXT DEFAULT 'watch',
-            color TEXT NOT NULL DEFAULT '#6366f1',
-            sort_order INTEGER DEFAULT 0,
-            sc_node_ids TEXT DEFAULT '[]',
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            is_read INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL
         )
     """)
-    # Seed initial wave data if empty
-    if conn.execute("SELECT COUNT(*) FROM wave_config").fetchone()[0] == 0:
-        _seed_waves(conn)
+
+    # Create indexes if not exist
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_recommendations_session_id ON recommendations(session_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_recommendations_status ON recommendations(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_recommendations_ticker ON recommendations(ticker)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_price_snapshots_rec_date ON price_snapshots(recommendation_id, snapshot_date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_catalyst_tickers_catalyst_id ON catalyst_tickers(catalyst_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_catalyst_tickers_ticker ON catalyst_tickers(ticker)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_is_read ON notifications(is_read)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_recs_session ON recommendations(session_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_recs_status ON recommendations(status)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_recs_monitoring ON recommendations(monitoring)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_recs_created ON recommendations(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_snaps_rec ON price_snapshots(recommendation_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_snaps_rec_date ON price_snapshots(recommendation_id, snapshot_date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_created ON analysis_sessions(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_broker_exec_symbol ON broker_executions(symbol)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_broker_exec_time ON broker_executions(trade_done_at)")
+
+    # Agent tables (P0: single agent + tool calling)
+    try:
+        from agent.schema import ensure_agent_tables
+
+        ensure_agent_tables(conn)
+    except ImportError:
+        pass
+
     conn.commit()
     conn.close()
 
 
-def _seed_waves(conn):
-    """Seed the 9 AI super-cycle waves with initial config from hardcoded values."""
-    waves = [
-        (1, '半导体算力层',       'bi-cpu',      '',                'done',     95,  ['NVDA','ARM','AMD','AVGO','INTC','TSM'],                          'NVDA 今年仅 +12%，半导体 ETF +85%，明显跑输指数——资金已在轮出',                                                                                     'exit',   '#6366f1', 0,  ['gpu','foundry']),
-        (2, '存储芯片',           'bi-hdd-stack','',                'active',   70,  ['MU','WDC','STX','SNDK'],                                          'MU Q3 营收 +346% YoY，EPS $25.11，Q4 指引 ~$31。分析师目标 $1,300–$1,550',                                                                      'hold',   '#7c3aed', 1,  ['hbm','dram','nand']),
-        (3, '光模块 / 光通信',     'bi-optical-audio','optical',    'early',    30,  ['LITE','COHR','MRVL','AAOI','CIEN','GLW','NOK','MTSI','VECO'],          '800G 产能缺口 40–60% 持续到 2027，InP 激光芯片是真正的供给瓶颈。光模块市场 $260 亿规模',                                                  'enter',  '#0891b2', 2,  ['optchip','optmod']),
-        (4, 'AI 算力 & 数据中心',  'bi-building',  '',                'brewing',  20,  ['SMCI','DELL','CRWV','NBIS','IREN','CIFR','WULF','CORZ'],              'AI 专用数据中心建设加速，算力租赁估值重构。部分 Bitcoin 矿机转型 AI 算力',                                                                  'watch',  '#ea580c', 3,  ['aiserver','dcbuild']),
-        (5, '网络设备',           'bi-router',    '',                'brewing',  30,  ['ANET','AVGO','MRVL','CSCO'],                                        'ANET 以太网交换机受益 AI 集群互联，高带宽低延迟需求持续增长',                                                                                  'watch',  '#16a34a', 4,  ['switch','intercon']),
-        (6, '电源 / 电网 / 温控',  'bi-lightning-charge','power',   'brewing',  35,  ['CEG','VRT','ETN','GEV','SMR','OKLO','VST'],                           'CEG（核电）逻辑硬已持有。VRT 已炒热变高β不追。GB200 机架功耗 120kW 是传统服务器 10 倍，电力是真瓶颈',                               'split',  '#ca8a04', 5,  ['nuclear','fuelcell','grid','cooling']),
-        (7, '原材料 / 稀土',      'bi-gem',       'material',        'idle',     5,   ['MP','USAR','UUUU','FCX','AA'],                                      '铜、稀土、铝随 AI 建设量级扩大受益。需等前几波充分兑现后才会轮到',                                                                              'wait',   '#9f7a3a', 6,  ['wafer','gas','resist','target']),
-        (8, '太空 / 航天',        'bi-rocket',    'dc_infra',        'brewing',  40,  ['ASTS','RKLB','LUNR','PL','SPCX'],                                   'ASTS/RKLB 已涨 400%+。SPCX（SpaceX IPO）是独立事件驱动。注意：此波有独立逻辑，不完全依附 AI 周期',                                           'wait',   '#7e22ce', 7,  ['satellite','launch']),
-        (9, '终局应用层',         'bi-stars',     'ai_app',          'idle',     5,   ['TSLA','PLTR','SYM','SERV'],                                       'AI 基础设施建成后，真正把 AI 变成收入的应用公司。PLTR 已有部分定价',                                                                          'future', '#dc2626', 8,  ['ent_ai','auto','robot']),
+AI_INFRA_SYMBOLS = ("SOXX.US", "SMH.US", "NVDA.US", "TSM.US")
+
+
+def _ensure_ai_monitor_table(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS ai_infra_monitor (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            checked_at TEXT NOT NULL,
+            signal TEXT NOT NULL DEFAULT 'wait',
+            score INTEGER NOT NULL DEFAULT 0,
+            summary TEXT NOT NULL DEFAULT '',
+            data_json TEXT NOT NULL DEFAULT '{}'
+        )
+    """)
+    conn.commit()
+
+
+def _mean(values):
+    return sum(values) / len(values) if values else 0.0
+
+
+def _ai_symbol_metrics(candles):
+    """Calculate the small, explainable indicator set used by the AI monitor."""
+    rows = []
+    for candle in candles:
+        try:
+            rows.append({
+                "close": float(candle["close"]),
+                "low": float(candle["low"]),
+                "volume": int(candle.get("volume") or 0),
+            })
+        except (KeyError, TypeError, ValueError):
+            continue
+    if len(rows) < 60:
+        raise ValueError("至少需要 60 根日K")
+
+    closes = [row["close"] for row in rows]
+    lows = [row["low"] for row in rows]
+    volumes = [row["volume"] for row in rows]
+    last = closes[-1]
+    prior_three_low = min(lows[-6:-3])
+    recent_three_low = min(lows[-3:])
+    return {
+        "last": round(last, 3),
+        "ma5": round(_mean(closes[-5:]), 3),
+        "ma20": round(_mean(closes[-20:]), 3),
+        "ma60": round(_mean(closes[-60:]), 3),
+        "return_3d": round((last / closes[-4] - 1) * 100, 2),
+        "no_new_low": recent_three_low >= prior_three_low,
+        "recent_low": round(recent_three_low, 3),
+        "prior_low": round(prior_three_low, 3),
+        "volume_contracting": volumes[-1] < _mean(volumes[-6:-1]),
+        "volume_ratio_5d": round(volumes[-1] / _mean(volumes[-6:-1]), 2)
+            if _mean(volumes[-6:-1]) else None,
+    }
+
+
+def calculate_ai_infra_signal(candles_by_symbol):
+    """Return a five-condition, conservative re-entry signal."""
+    metrics = {
+        symbol: _ai_symbol_metrics(candles_by_symbol[symbol])
+        for symbol in AI_INFRA_SYMBOLS
+    }
+    soxx, smh = metrics["SOXX.US"], metrics["SMH.US"]
+    nvda, tsm = metrics["NVDA.US"], metrics["TSM.US"]
+
+    conditions = [
+        {
+            "key": "hold_ma60",
+            "label": "SOXX 与 SMH 守住动态 60 日均线",
+            "met": soxx["last"] >= soxx["ma60"] and smh["last"] >= smh["ma60"],
+        },
+        {
+            "key": "no_new_low",
+            "label": "两只行业 ETF 连续三日未创更低低点",
+            "met": soxx["no_new_low"] and smh["no_new_low"],
+        },
+        {
+            "key": "volume_contracting",
+            "label": "SOXX 与 SMH 下跌成交量收缩",
+            "met": soxx["volume_contracting"] and smh["volume_contracting"],
+        },
+        {
+            "key": "leaders_relative_strength",
+            "label": "NVDA 与 TSM 三日表现强于 SOXX",
+            "met": (
+                nvda["return_3d"] >= soxx["return_3d"]
+                and tsm["return_3d"] >= soxx["return_3d"]
+            ),
+        },
+        {
+            "key": "reclaim_average",
+            "label": "SOXX 与 SMH 重新站上 5 日或 20 日均线",
+            "met": (
+                (soxx["last"] >= soxx["ma5"] or soxx["last"] >= soxx["ma20"])
+                and (smh["last"] >= smh["ma5"] or smh["last"] >= smh["ma20"])
+            ),
+        },
     ]
-    conn.executemany("""
-        INSERT INTO wave_config (wave_num, name, icon, category, status, progress_pct, tickers, signal_text, action_type, color, sort_order, sc_node_ids)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, [(w[0], w[1], w[2], w[3], w[4], w[5], json.dumps(w[6]), w[7], w[8], w[9], w[10], json.dumps(w[11])) for w in waves])
+    score = sum(1 for condition in conditions if condition["met"])
+    signal = "actionable" if score >= 3 else "wait"
+    summary = (
+        "满足至少三项止跌条件，可考虑第一批 20%–25% 试仓。"
+        if signal == "actionable"
+        else f"仅满足 {score}/5 项，尚未触发买回。"
+    )
+    return {
+        "signal": signal,
+        "score": score,
+        "summary": summary,
+        "conditions": conditions,
+        "symbols": metrics,
+    }
+
+
+def _to_float(v):
+    """Safely convert DB value to float, returns None for non-numeric."""
+    if v is None:
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def safe_float(value, default=0.0):
+    converted = _to_float(value)
+    return default if converted is None else converted
+
+
+def _business_days_since(date_value, today=None):
+    """Count weekdays after date_value through today; sufficient for freshness checks."""
+    if not date_value:
+        return None
+    try:
+        start = date.fromisoformat(str(date_value)[:10])
+    except (TypeError, ValueError):
+        return None
+    end = today or date.today()
+    if start >= end:
+        return 0
+    cursor = start + timedelta(days=1)
+    count = 0
+    while cursor <= end:
+        if cursor.weekday() < 5:
+            count += 1
+        cursor += timedelta(days=1)
+    return count
+
+
+def evaluate_price_monitor(row, today=None):
+    """Evaluate one monitor without treating a price touch as an automatic buy."""
+    today = today or date.today()
+    r = dict(row)
+    lp = _to_float(r.get("latest_price"))
+    wp = _to_float(r.get("wait_price"))
+    ep = _to_float(r.get("entry_price"))
+    direction = (r.get("monitor_direction") or "").strip().lower()
+    if direction not in {"pullback", "breakout"}:
+        direction = "breakout" if wp and ep and wp > ep else "pullback"
+    r["monitor_direction"] = direction
+    r["monitor_direction_label"] = "突破" if direction == "breakout" else "回落"
+    r["monitor_state"] = "tracking"
+    r["monitor_reason"] = "条件尚未接近"
+
+    validity = r.get("validity_date")
+    if validity:
+        try:
+            days_left = (date.fromisoformat(str(validity)[:10]) - today).days
+            r["days_until_expiry"] = days_left
+            r["is_expiring_soon"] = 0 <= days_left <= 7
+            if days_left < 0:
+                r["monitor_state"] = "invalidated"
+                r["monitor_reason"] = "监控有效期已结束"
+                return r
+        except ValueError:
+            pass
+
+    stale_days = _business_days_since(r.get("latest_date"), today)
+    r["stale_trading_days"] = stale_days
+    if lp is None or wp is None:
+        r["monitor_state"] = "revalidate"
+        r["monitor_reason"] = "缺少最新价格或目标条件"
+        return r
+    if stale_days is None or stale_days > 1:
+        r["monitor_state"] = "revalidate"
+        r["monitor_reason"] = f"行情已过期（{stale_days if stale_days is not None else '未知'} 个交易日）"
+        return r
+
+    if direction == "pullback":
+        gap_pct = (lp - wp) / wp * 100
+        r["monitor_gap_pct"] = round(gap_pct, 2)
+        if lp <= wp * 0.92:
+            r["monitor_state"] = "revalidate"
+            r["monitor_reason"] = "价格深度跌穿等待区，需重新检查逻辑"
+        elif lp <= wp:
+            r["monitor_state"] = "triggered"
+            r["monitor_reason"] = "价格进入等待区，尚需确认基本面与量价"
+        elif gap_pct <= 10:
+            r["monitor_state"] = "approaching"
+            r["monitor_reason"] = "距离回落目标不足 10%"
+    else:
+        gap_pct = (lp - wp) / wp * 100
+        r["monitor_gap_pct"] = round(gap_pct, 2)
+        if lp >= wp:
+            r["monitor_state"] = "triggered"
+            r["monitor_reason"] = "价格达到突破位，尚需确认收盘与成交量"
+        elif lp >= wp * 0.90:
+            r["monitor_state"] = "approaching"
+            r["monitor_reason"] = "距离突破位不足 10%"
+    return r
+
+
+def _validate_ticker(value):
+    if not isinstance(value, str) or not value or len(value) > 20:
+        return False
+    return all(char.isdigit() or char.isupper() or char == "." for char in value)
+
+
+def infer_event_scope(event):
+    """Classify legacy event rows while new rows store an explicit scope."""
+    scope = (event.get("event_scope") or "").strip().lower()
+    if scope in {"company", "sector", "macro"}:
+        return scope
+    title = (event.get("title") or "").lower()
+    if any(token in title for token in ("板块", "行业", "产业链", "财报季跟踪")):
+        return "sector"
+    event_type = (event.get("event_type") or "").lower()
+    if event_type in {"macro", "fed", "policy"}:
+        return "macro"
+    return "company"
+
+
+def _candle_date(value):
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(value).date().isoformat()
+    return str(value)[:10]
 
 
 def calc_pct(entry, current):
-    if entry and current:
-        return round((current - entry) / entry * 100, 2)
+    e, c = _to_float(entry), _to_float(current)
+    if e and c:
+        return round((c - e) / e * 100, 2)
     return None
 
 
@@ -344,6 +928,7 @@ def enrich_rows(rows):
         sess = sessions_map.get(r.get("session_id"))
         r["session_question"] = sess["question"] if sess else ""
         r["session_theme"] = sess["theme"] if sess else ""
+        r["primary_theme"] = primary_theme(r)
 
         snap = snaps.get(r["id"])
         r["pct_change"] = None
@@ -379,26 +964,15 @@ def enrich_rows(rows):
                 pass
 
         r["price_alert"] = False
-        if r.get("monitoring") and r.get("wait_price") and r.get("latest_price"):
-            gap_pct = abs(r["latest_price"] - r["wait_price"]) / r["wait_price"] * 100
-            r["price_alert"] = gap_pct <= 3
-
-        # ── Monitor status lifecycle ──
-        db_status = (r.get("monitor_status") or "idle").strip()
-        try:
-            r["action_log"] = json.loads(r.get("monitor_action_log") or "[]")
-        except Exception:
-            r["action_log"] = []
-        # Terminal states: never auto-override
-        if db_status in ("bought", "skipped"):
-            r["monitor_status"] = db_status
-        elif r.get("monitoring") and r.get("price_alert"):
-            r["monitor_status"] = "triggered"
-        elif r.get("monitoring"):
-            r["monitor_status"] = "active"
-        else:
-            r["monitor_status"] = "idle"
-        r["monitorStatusLabel"] = MONITOR_STATUS.get(r["monitor_status"], r["monitor_status"])
+        if r.get("monitoring"):
+            wp = _to_float(r.get("wait_price"))
+            lp = _to_float(r.get("latest_price"))
+            if wp and lp:
+                direction = (r.get("monitor_direction") or "").lower()
+                if direction not in {"pullback", "breakout"}:
+                    ep = _to_float(r.get("entry_price"))
+                    direction = "breakout" if ep and wp > ep else "pullback"
+                r["price_alert"] = lp >= wp if direction == "breakout" else lp <= wp
 
     return rows
 
@@ -487,14 +1061,24 @@ def dashboard():
     recent_recs = enrich_rows(recent_recs)
     monitoring_recs = enrich_rows(monitoring_recs)
     stats = compute_stats()
+    # Batch-query rec_count for all sessions
+    rec_counts = {}
+    if sessions:
+        session_ids = [s["id"] for s in sessions]
+        conn = get_db()
+        ph = ",".join("?" * len(session_ids))
+        for row in conn.execute(
+            f"SELECT session_id, COUNT(*) as cnt FROM recommendations "
+            f"WHERE session_id IN ({ph}) GROUP BY session_id",
+            session_ids
+        ).fetchall():
+            rec_counts[row["session_id"]] = row["cnt"]
+        conn.close()
+
     sessions_list = []
     for s in sessions:
         s = dict(s)
-        conn = get_db()
-        s["rec_count"] = conn.execute(
-            "SELECT COUNT(*) FROM recommendations WHERE session_id=?", (s["id"],)
-        ).fetchone()[0]
-        conn.close()
+        s["rec_count"] = rec_counts.get(s["id"], 0)
         sessions_list.append(s)
     return render_template("dashboard.html", recent=recent_recs, stats=stats,
                            sessions=sessions_list, monitoring=monitoring_recs)
@@ -505,14 +1089,27 @@ def sessions():
     conn = get_db()
     rows = conn.execute("SELECT * FROM analysis_sessions ORDER BY created_at DESC").fetchall()
     conn.close()
+    # Batch-query all recommendations for all sessions
+    all_recs = {}
+    if rows:
+        session_ids = [s["id"] for s in rows]
+        conn = get_db()
+        ph = ",".join("?" * len(session_ids))
+        for row in conn.execute(
+            f"SELECT session_id, entry_rec, status FROM recommendations "
+            f"WHERE session_id IN ({ph})",
+            session_ids
+        ).fetchall():
+            sid = row["session_id"]
+            if sid not in all_recs:
+                all_recs[sid] = []
+            all_recs[sid].append(dict(row))
+        conn.close()
+
     result = []
     for s in rows:
         s = dict(s)
-        conn = get_db()
-        recs = conn.execute(
-            "SELECT entry_rec, status FROM recommendations WHERE session_id=?", (s["id"],)
-        ).fetchall()
-        conn.close()
+        recs = all_recs.get(s["id"], [])
         s["rec_count"] = len(recs)
         s["immediate_count"] = sum(1 for r in recs if r["entry_rec"] == "immediate")
         s["wait_count"] = sum(1 for r in recs if r["entry_rec"] == "wait")
@@ -591,72 +1188,311 @@ def session_detail(session_id):
         flash("会话不存在", "danger")
         return redirect(url_for("sessions"))
     recs = enrich_rows(recs)
-    # Compute entry_counts for the session
     entry_counts = {}
     grouped_recs = {}
     for r in recs:
-        key = (r.get("entry_rec") or "watch")
-        entry_counts[key] = entry_counts.get(key, 0) + 1
-        grouped_recs.setdefault(key, []).append(r)
+        er = (r.get("entry_rec") or "watch").strip()
+        entry_counts[er] = entry_counts.get(er, 0) + 1
+        grouped_recs.setdefault(er, []).append(r)
     return render_template("session_detail.html", session=dict(session), recs=recs,
-                           entry_rec=ENTRY_REC, entry_counts=entry_counts,
-                           grouped_recs=grouped_recs, today=str(date.today()))
+                           entry_rec=ENTRY_REC, today=str(date.today()),
+                           entry_counts=entry_counts, grouped_recs=grouped_recs)
 
 
 PER_PAGE = 50
+
+
+def _lifecycle_for(position, executions, recommendations):
+    if position and _to_float(position.get("quantity")) > 0:
+        return "holding"
+    if executions:
+        return "sold"
+    if any(
+        r.get("status") == "active" and r.get("entry_rec") != "avoid"
+        for r in recommendations
+    ):
+        return "watching"
+    return "archived"
+
+
+def _load_broker_data(conn):
+    positions = {
+        row["symbol"]: dict(row)
+        for row in conn.execute("SELECT * FROM broker_positions").fetchall()
+    }
+    executions = {}
+    for row in conn.execute(
+        "SELECT * FROM broker_executions ORDER BY trade_done_at DESC"
+    ).fetchall():
+        item = dict(row)
+        executions.setdefault(item["symbol"], []).append(item)
+    return positions, executions
+
+
+def _build_stock_rows(recommendations, positions, executions):
+    recs_by_symbol = {}
+    for rec in recommendations:
+        symbol = normalize_symbol(rec.get("ticker"), rec.get("market"))
+        recs_by_symbol.setdefault(symbol, []).append(rec)
+
+    rows = []
+    for symbol in sorted(set(recs_by_symbol) | set(positions) | set(executions)):
+        recs = sorted(
+            recs_by_symbol.get(symbol, []),
+            key=lambda item: (item.get("status") == "active", item.get("created_at") or ""),
+            reverse=True,
+        )
+        representative = recs[0] if recs else {}
+        position = positions.get(symbol)
+        trades = executions.get(symbol, [])
+        lifecycle = _lifecycle_for(position, trades, recs)
+        row = dict(representative)
+        row.update(
+            {
+                "symbol": symbol,
+                "ticker_display": display_symbol(symbol),
+                "market_display": symbol.rsplit(".", 1)[-1] if "." in symbol else "",
+                "position": position,
+                "quantity": _to_float(position.get("quantity")) if position else 0,
+                "cost_price": _to_float(position.get("cost_price")) if position else None,
+                "current_price": (
+                    _to_float(position.get("last_price")) if position and position.get("last_price")
+                    else representative.get("latest_price")
+                ),
+                "trade_count": len(trades),
+                "last_trade_at": trades[0]["trade_done_at"] if trades else "",
+                "rec_count": len(recs),
+                "lifecycle": lifecycle,
+                "lifecycle_info": LIFECYCLE_LABEL[lifecycle],
+                "has_recommendation": bool(recs),
+                "primary_theme": representative.get("primary_theme")
+                or TICKER_THEME_OVERRIDES.get(symbol, "互联网与消费"),
+            }
+        )
+        if lifecycle == "holding":
+            row["judgement"] = "持有"
+            row["judgement_class"] = "entry-holding"
+        elif lifecycle == "sold":
+            row["judgement"] = "已退出"
+            row["judgement_class"] = "entry-exited"
+        elif representative.get("is_expired_validity"):
+            row["judgement"] = "待复核"
+            row["judgement_class"] = "entry-review"
+        else:
+            judgement_map = {
+                "actionable": ("可入", "entry-actionable"),
+                "immediate": ("可入", "entry-immediate"),
+                "wait": ("等待", "entry-wait"),
+                "watch": ("观察", "entry-watch"),
+            }
+            row["judgement"], row["judgement_class"] = judgement_map.get(
+                representative.get("entry_rec"), ("观察", "entry-watch")
+            )
+        if lifecycle == "holding" and row.get("current_price") and row.get("cost_price"):
+            row["display_pnl"] = round(
+                (row["current_price"] - row["cost_price"]) * row["quantity"], 2
+            )
+            row["display_pnl_pct"] = round(
+                (row["current_price"] - row["cost_price"]) / row["cost_price"] * 100, 2
+            )
+        elif lifecycle == "sold" and trades:
+            buy_cost = sum(
+                _to_float(t["quantity"]) * _to_float(t["price"])
+                for t in trades if str(t.get("side", "")).lower() == "buy"
+            )
+            sell_value = sum(
+                _to_float(t["quantity"]) * _to_float(t["price"])
+                for t in trades if str(t.get("side", "")).lower() == "sell"
+            )
+            row["display_pnl"] = round(sell_value - buy_cost, 2)
+            row["display_pnl_pct"] = round((sell_value - buy_cost) / buy_cost * 100, 2) if buy_cost else None
+        else:
+            row["display_pnl"] = None
+            row["display_pnl_pct"] = None
+        rows.append(row)
+    order = {"holding": 0, "watching": 1, "sold": 2, "archived": 3}
+    rows.sort(
+        key=lambda item: (
+            order[item["lifecycle"]],
+            item.get("created_at") or item.get("last_trade_at") or "",
+        ),
+        reverse=False,
+    )
+    return rows
 
 
 @app.route("/recommendations")
 def recommendations():
     framework = request.args.get("framework", "")
     status = request.args.get("status", "")
-    source = request.args.get("source", "")
     entry_rec_filter = request.args.get("entry_rec", "")
-    bought_filter = request.args.get("bought", "")
+    lifecycle_filter = request.args.get("lifecycle", "")
+    selected_theme = request.args.get("theme", "")
     try:
         page = max(1, int(request.args.get("page", 1) or 1))
     except (ValueError, TypeError):
         page = 1
 
-    where = " WHERE 1=1"
-    params = []
-    if framework:
-        where += " AND framework=?"; params.append(framework)
-    if status:
-        where += " AND status=?"; params.append(status)
-    if source:
-        where += " AND source_type=?"; params.append(source)
-    if entry_rec_filter:
-        where += " AND entry_rec=?"; params.append(entry_rec_filter)
-    if bought_filter == "real":
-        where += " AND is_bought=1"
-    elif bought_filter == "paper":
-        where += " AND is_paper=1"
-    elif bought_filter == "none":
-        where += " AND is_bought=0 AND (is_paper IS NULL OR is_paper=0)"
-
     conn = get_db()
-    total = conn.execute("SELECT COUNT(*) FROM recommendations" + where, params).fetchone()[0]
-    rows = conn.execute(
-        "SELECT * FROM recommendations" + where + " ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        params + [PER_PAGE, (page - 1) * PER_PAGE],
+    rec_rows = conn.execute(
+        "SELECT * FROM recommendations ORDER BY created_at DESC"
     ).fetchall()
+    themes = list(PRIMARY_THEMES)
+    positions, executions = _load_broker_data(conn)
     conn.close()
-    rows = enrich_rows(rows)
+
+    enriched = enrich_rows(rec_rows)
+    rows = _build_stock_rows(enriched, positions, executions)
+    visible_rows = [r for r in rows if r["lifecycle"] != "archived"]
+    tab_counts = {
+        "all": len(visible_rows),
+        "watching": sum(r["lifecycle"] == "watching" for r in visible_rows),
+        "holding": sum(r["lifecycle"] == "holding" for r in visible_rows),
+        "history": sum(r["trade_count"] > 0 for r in rows),
+    }
+    if framework:
+        rows = [r for r in rows if r.get("framework") == framework]
+    if status:
+        rows = [r for r in rows if r.get("status") == status]
+    if entry_rec_filter:
+        rows = [r for r in rows if r.get("entry_rec") == entry_rec_filter]
+    if lifecycle_filter == "history":
+        # 历史持仓包含当前仍持有和已卖出的所有交易过的股票。
+        rows = [r for r in rows if r["trade_count"] > 0]
+    elif lifecycle_filter:
+        rows = [r for r in rows if r["lifecycle"] == lifecycle_filter]
+    else:
+        rows = visible_rows
+    if selected_theme:
+        rows = [r for r in rows if r.get("primary_theme") == selected_theme]
+
+    total = len(rows)
     pages = max(1, (total + PER_PAGE - 1) // PER_PAGE)
+    rows = rows[(page - 1) * PER_PAGE:page * PER_PAGE]
     filter_qs = "&".join(
         f"{k}={v}" for k, v in [
-            ("framework", framework), ("status", status), ("source", source),
-            ("entry_rec", entry_rec_filter), ("bought", bought_filter),
+            ("framework", framework), ("status", status),
+            ("entry_rec", entry_rec_filter), ("lifecycle", lifecycle_filter),
+            ("theme", selected_theme),
         ] if v
     )
     return render_template(
         "recommendations.html", rows=rows, frameworks=FRAMEWORKS,
         entry_rec_map=ENTRY_REC,
         selected_fw=framework, selected_status=status,
-        selected_source=source, selected_entry=entry_rec_filter,
-        selected_bought=bought_filter,
+        selected_entry=entry_rec_filter,
+        selected_lifecycle=lifecycle_filter,
+        selected_theme=selected_theme, themes=themes,
+        tab_counts=tab_counts,
         page=page, pages=pages, total=total, filter_qs=filter_qs,
+    )
+
+
+@app.route("/stocks/sync", methods=["POST"])
+def sync_stocks():
+    """Synchronise read-only Longbridge positions and executions."""
+    try:
+        snapshot = LongbridgeClient().account_snapshot(datetime(2025, 9, 12))
+    except (LongbridgeNotConfigured, Exception) as exc:
+        flash(f"长桥同步失败：{exc}", "danger")
+        return redirect(url_for("recommendations"))
+
+    now = datetime.now().isoformat(timespec="seconds")
+    conn = get_db()
+    conn.execute("DELETE FROM broker_positions")
+    for item in snapshot["positions"]:
+        original = item["symbol"]
+        symbol = normalize_symbol(original)
+        conn.execute(
+            "INSERT OR REPLACE INTO broker_positions "
+            "(symbol,original_symbol,name,quantity,available_quantity,cost_price,last_price,currency,market,synced_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                symbol, original, item.get("name", ""), item["quantity"],
+                item["available_quantity"], item.get("cost_price"), item.get("last_price"),
+                item.get("currency", ""), item.get("market", ""), now,
+            ),
+        )
+    for item in snapshot["executions"]:
+        original = item["symbol"]
+        symbol = normalize_symbol(original)
+        conn.execute(
+            "INSERT OR REPLACE INTO broker_executions "
+            "(trade_key,trade_id,order_id,symbol,original_symbol,side,quantity,price,trade_done_at,synced_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                item["trade_key"], item.get("trade_id", ""), item.get("order_id", ""),
+                symbol, original, item.get("side", ""), item["quantity"], item["price"],
+                item["trade_done_at"], now,
+            ),
+        )
+    conn.commit()
+    conn.close()
+    flash(
+        f"长桥同步完成：{len(snapshot['positions'])} 个持仓，"
+        f"{len(snapshot['executions'])} 笔成交",
+        "success",
+    )
+    return redirect(url_for("recommendations"))
+
+
+@app.route("/stock/<path:symbol>")
+def stock_detail(symbol):
+    symbol = normalize_symbol(symbol)
+    conn = get_db()
+    all_recs = [dict(row) for row in conn.execute(
+        "SELECT * FROM recommendations ORDER BY created_at DESC"
+    ).fetchall()]
+    matching = [
+        row for row in all_recs
+        if normalize_symbol(row.get("ticker"), row.get("market")) == symbol
+    ]
+    position_row = conn.execute(
+        "SELECT * FROM broker_positions WHERE symbol=?", (symbol,)
+    ).fetchone()
+    trade_rows = conn.execute(
+        "SELECT * FROM broker_executions WHERE symbol=? ORDER BY trade_done_at DESC",
+        (symbol,),
+    ).fetchall()
+    conn.close()
+
+    recommendations_for_stock = enrich_rows(matching)
+    position = dict(position_row) if position_row else None
+    trades = [dict(row) for row in trade_rows]
+    lifecycle = _lifecycle_for(position, trades, recommendations_for_stock)
+    timeline = []
+    for rec in recommendations_for_stock:
+        timeline.append({
+            "at": rec.get("created_at") or "",
+            "kind": "recommendation",
+            "title": rec.get("entry_rec_label", ("推荐", ""))[0],
+            "detail": rec.get("framework_name", ""),
+            "rec": rec,
+        })
+    for trade in trades:
+        is_buy = str(trade.get("side", "")).lower() == "buy"
+        timeline.append({
+            "at": trade.get("trade_done_at") or "",
+            "kind": "buy" if is_buy else "sell",
+            "title": "买入" if is_buy else "卖出",
+            "detail": f"{trade['quantity']:g} 股 @ {trade['price']:g}",
+            "trade": trade,
+        })
+    timeline.sort(key=lambda item: item["at"], reverse=True)
+    if not recommendations_for_stock and not position and not trades:
+        flash("股票记录不存在", "warning")
+        return redirect(url_for("recommendations"))
+    return render_template(
+        "stock_detail.html",
+        symbol=symbol,
+        ticker=display_symbol(symbol),
+        market=symbol.rsplit(".", 1)[-1] if "." in symbol else "",
+        position=position,
+        trades=trades,
+        recs=recommendations_for_stock,
+        lifecycle=lifecycle,
+        lifecycle_info=LIFECYCLE_LABEL[lifecycle],
+        timeline=timeline,
     )
 
 
@@ -683,7 +1519,7 @@ def edit_rec(rec_id):
             """UPDATE recommendations SET
                entry_price=?, stop_loss_price=?, target1_price=?,
                entry_rec=?, risk_level=?, hold_period=?, strategy_type=?,
-               catalyst=?, wait_price=?, wait_condition=?, validity_date=?,
+               catalyst=?, wait_price=?, wait_condition=?, validity_date=?, monitor_direction=?,
                conviction=?, notes=?, signals=?
                WHERE id=?""",
             (entry_price, stop, t1,
@@ -695,6 +1531,7 @@ def edit_rec(rec_id):
              float(wait_price_raw) if wait_price_raw else None,
              request.form.get("wait_condition", ""),
              request.form.get("validity_date") or None,
+             request.form.get("monitor_direction", "") or "",
              int(request.form.get("conviction") or row["conviction"] or 3),
              request.form.get("notes", ""),
              json.dumps(request.form.getlist("signals"), ensure_ascii=False),
@@ -714,6 +1551,7 @@ def edit_rec(rec_id):
         entry_rec=ENTRY_REC, risk_level=RISK_LEVEL,
         hold_period=HOLD_PERIOD, strategy_type=STRATEGY_TYPE,
         today=str(date.today()),
+        fw_defaults_json=json.dumps(FRAMEWORK_DEFAULTS),
     )
 
 
@@ -757,13 +1595,14 @@ def add():
                 stop_loss_price, target1_price, signals,
                 conviction, source_type, notes,
                 entry_rec, risk_level, hold_period, strategy_type,
-                catalyst, wait_price, wait_condition, validity_date)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                catalyst, wait_price, wait_condition, validity_date, monitor_direction)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (0, 0, sid, created_at, ticker, market, framework, entry_price,
              stop, t1, json.dumps(signals, ensure_ascii=False),
              conviction, source_type, notes,
              entry_rec, risk_level, hold_period, strategy_type,
-             catalyst, wait_price, wait_condition, validity_date),
+             catalyst, wait_price, wait_condition, validity_date,
+             request.form.get("monitor_direction", "") or ""),
         )
         rec_id = cur.lastrowid
         conn.commit()
@@ -784,7 +1623,8 @@ def add():
                            today=str(date.today()),
                            entry_rec=ENTRY_REC, risk_level=RISK_LEVEL,
                            hold_period=HOLD_PERIOD, strategy_type=STRATEGY_TYPE,
-                           all_sessions=all_sessions, default_session=session_id)
+                           all_sessions=all_sessions, default_session=session_id,
+                           fw_defaults_json=json.dumps(FRAMEWORK_DEFAULTS))
 
 
 @app.route("/rec/<int:rec_id>")
@@ -795,6 +1635,30 @@ def detail(rec_id):
         "SELECT * FROM price_snapshots WHERE recommendation_id=? ORDER BY snapshot_date",
         (rec_id,),
     ).fetchall()
+    related_catalysts = []
+    position = None
+    broker_trades = []
+    lifecycle = "watching"
+    if row:
+        ticker = row["ticker"]
+        symbol = normalize_symbol(row["ticker"], row["market"])
+        related = conn.execute(
+            "SELECT c.* FROM catalysts c "
+            "JOIN catalyst_tickers ct ON c.id = ct.catalyst_id "
+            "WHERE ct.ticker=? AND c.status IN ('pending','active') "
+            "ORDER BY c.event_date ASC",
+            (ticker,)
+        ).fetchall()
+        related_catalysts = [dict(c) for c in related]
+        position_row = conn.execute(
+            "SELECT * FROM broker_positions WHERE symbol=?", (symbol,)
+        ).fetchone()
+        position = dict(position_row) if position_row else None
+        broker_trades = [dict(item) for item in conn.execute(
+            "SELECT * FROM broker_executions WHERE symbol=? ORDER BY trade_done_at DESC",
+            (symbol,),
+        ).fetchall()]
+        lifecycle = _lifecycle_for(position, broker_trades, [dict(row)])
     conn.close()
     if not row:
         flash("记录不存在", "danger")
@@ -803,7 +1667,10 @@ def detail(rec_id):
     return render_template("detail.html", row=row, snapshots=[dict(s) for s in snapshots],
                            frameworks=FRAMEWORKS, today=str(date.today()),
                            entry_rec=ENTRY_REC, risk_level=RISK_LEVEL,
-                           hold_period=HOLD_PERIOD, strategy_type=STRATEGY_TYPE)
+                           hold_period=HOLD_PERIOD, strategy_type=STRATEGY_TYPE,
+                           related_catalysts=related_catalysts,
+                           position=position, broker_trades=broker_trades,
+                           lifecycle=lifecycle, lifecycle_info=LIFECYCLE_LABEL[lifecycle])
 
 
 @app.route("/rec/<int:rec_id>/update_price", methods=["POST"])
@@ -833,16 +1700,25 @@ def update_price(rec_id):
     # 观察、等回落、不碰类是预测记录，不存在持仓，不触发
     is_position = row["entry_rec"] == "immediate" or row["is_bought"] or (row["is_paper"] if "is_paper" in row.keys() else 0)
     if row["status"] == "active" and is_position:
-        if row["stop_loss_price"] and price <= row["stop_loss_price"]:
+        sl = _to_float(row["stop_loss_price"])
+        t1 = _to_float(row["target1_price"])
+        if sl and price <= sl:
             conn.execute(
                 "UPDATE recommendations SET status='loss', close_price=?, close_date=?, close_reason='止损触发' WHERE id=?",
                 (price, snap_date, rec_id))
             msg += " ⚠️ 止损触发"
-        elif row["target1_price"] and price >= row["target1_price"]:
+        elif t1 and price >= t1:
             conn.execute("UPDATE recommendations SET status='profit' WHERE id=?", (rec_id,))
             msg += " 🎯 到达止盈目标"
-    if row["monitoring"] and row["wait_price"] and price <= row["wait_price"]:
-        flash(f"🔔 {row['ticker']} 已到达等待价 ${row['wait_price']:.2f}，可以考虑入场！", "warning")
+    if row["monitoring"]:
+        wp = _to_float(row["wait_price"])
+        direction = (row["monitor_direction"] or "").lower() if "monitor_direction" in row.keys() else ""
+        if direction not in {"pullback", "breakout"}:
+            ep = _to_float(row["entry_price"])
+            direction = "breakout" if wp and ep and wp > ep else "pullback"
+        touched = wp and (price >= wp if direction == "breakout" else price <= wp)
+        if touched:
+            flash(f"🔔 {row['ticker']} 已触发价格条件，请先复核逻辑和量价。", "warning")
     conn.commit()
     conn.close()
     flash(msg, "info")
@@ -870,13 +1746,23 @@ def toggle_bought(rec_id):
 @app.route("/rec/<int:rec_id>/toggle_monitor", methods=["POST"])
 def toggle_monitor(rec_id):
     conn = get_db()
-    row = conn.execute("SELECT monitoring, ticker, monitor_status FROM recommendations WHERE id=?", (rec_id,)).fetchone()
+    row = conn.execute(
+        "SELECT monitoring, ticker, hold_period, validity_date FROM recommendations WHERE id=?",
+        (rec_id,),
+    ).fetchone()
+    if not row:
+        conn.close()
+        flash("推荐不存在", "warning")
+        return redirect(url_for("monitor"))
     new_val = 0 if row["monitoring"] else 1
-    new_status = "active" if new_val else "idle"
-    # Don't override terminal states
-    if row["monitor_status"] in ("bought", "skipped"):
-        new_status = row["monitor_status"]
-    conn.execute("UPDATE recommendations SET monitoring=?, monitor_status=? WHERE id=?", (new_val, new_status, rec_id))
+    validity_date = row["validity_date"]
+    if new_val and not validity_date:
+        default_days = {"short": 30, "medium": 90, "long": 180, "vlong": 90}
+        validity_date = str(date.today() + timedelta(days=default_days.get(row["hold_period"], 90)))
+    conn.execute(
+        "UPDATE recommendations SET monitoring=?, validity_date=?, monitor_state=? WHERE id=?",
+        (new_val, validity_date, "tracking" if new_val else "disabled", rec_id),
+    )
     conn.commit()
     conn.close()
     flash(("🔔 已开启价格监控" if new_val else "已关闭监控") + f" — {row['ticker']}", "success")
@@ -885,75 +1771,42 @@ def toggle_monitor(rec_id):
 
 @app.route("/rec/<int:rec_id>/monitor_action", methods=["POST"])
 def monitor_action(rec_id):
-    """Handle closed-loop actions on triggered recommendations."""
-    action = request.form.get("action", "").strip()
+    action   = request.form.get("action", "")
     conn = get_db()
-    row = conn.execute(
-        "SELECT ticker, monitor_status, monitor_action_log, monitoring, wait_price FROM recommendations WHERE id=?",
-        (rec_id,),
-    ).fetchone()
+    row  = conn.execute("SELECT ticker FROM recommendations WHERE id=?", (rec_id,)).fetchone()
     if not row:
-        flash("记录不存在", "error")
-        return redirect(url_for("recommendations"))
-
-    try:
-        action_log = json.loads(row["monitor_action_log"] or "[]")
-    except Exception:
-        action_log = []
-
-    today_str = str(date.today())
+        conn.close()
+        flash("推荐不存在", "warning")
+        return redirect(url_for("monitor"))
 
     if action == "bought":
-        buy_type = request.form.get("buy_type", "paper")
-        buy_price = float(request.form.get("buy_price", 0))
+        buy_type  = request.form.get("buy_type", "real")
+        buy_price = request.form.get("buy_price")
+        try:
+            buy_price = float(buy_price)
+        except (TypeError, ValueError):
+            buy_price = None
         if buy_type == "real":
-            conn.execute("UPDATE recommendations SET is_bought=1, monitoring=0, monitor_status='bought', "
-                        "close_price=?, close_date=? WHERE id=?", (buy_price, today_str, rec_id))
+            conn.execute(
+                "UPDATE recommendations SET is_bought=1, entry_price=COALESCE(?,entry_price), wait_price=NULL, monitoring=0, monitor_state='completed' WHERE id=?",
+                (buy_price, rec_id))
+            flash(f"已标记 {row['ticker']} 为实盘买入", "success")
         else:
-            conn.execute("UPDATE recommendations SET is_paper=1, monitoring=0, monitor_status='bought', "
-                        "close_price=?, close_date=? WHERE id=?", (buy_price, today_str, rec_id))
-        action_log.append({
-            "action": "bought", "date": today_str,
-            "buy_type": buy_type, "buy_price": buy_price,
-        })
-        label = "实盘" if buy_type == "real" else "模拟"
-        flash(f"✅ 已记录{label}买入 {row['ticker']} @ ${buy_price:.2f}", "success")
+            conn.execute(
+                "UPDATE recommendations SET is_paper=1, wait_price=NULL, monitoring=0, monitor_state='completed' WHERE id=?", (rec_id,))
+            flash(f"已标记 {row['ticker']} 为模拟买入", "success")
 
     elif action == "skipped":
-        reason_key = request.form.get("reason", "manual")
-        reason_label = MONITOR_ACTION_REASONS.get(reason_key, reason_key)
-        conn.execute("UPDATE recommendations SET monitoring=0, monitor_status='skipped' WHERE id=?", (rec_id,))
-        action_log.append({
-            "action": "skipped", "date": today_str,
-            "reason": reason_key, "reason_label": reason_label,
-        })
-        flash(f"⏭️ 已跳过 {row['ticker']} — {reason_label}", "info")
-
-    elif action == "adjust":
-        new_wait = float(request.form.get("new_wait_price", row["wait_price"] or 0))
-        old_wait = row["wait_price"]
-        conn.execute("UPDATE recommendations SET wait_price=?, monitor_status='active' WHERE id=?", (new_wait, rec_id))
-        action_log.append({
-            "action": "adjust", "date": today_str,
-            "old_wait_price": old_wait, "new_wait_price": new_wait,
-        })
-        flash(f"📝 {row['ticker']} 等待价调整: ${old_wait:.2f} → ${new_wait:.2f}", "warning")
+        reason = request.form.get("reason", "manual")
+        conn.execute("UPDATE recommendations SET wait_price=NULL, monitoring=0, monitor_state='dismissed' WHERE id=?", (rec_id,))
+        flash(f"已跳过 {row['ticker']} 的监控目标", "info")
 
     elif action == "continue":
-        conn.execute("UPDATE recommendations SET monitor_status='active' WHERE id=?", (rec_id,))
-        action_log.append({"action": "continue", "date": today_str})
-        flash(f"▶️ {row['ticker']} 继续观察中", "info")
+        flash(f"{row['ticker']} 继续等待", "info")
 
-    else:
-        flash("未知操作", "error")
-        conn.close()
-        return redirect(url_for("detail", rec_id=rec_id))
-
-    conn.execute("UPDATE recommendations SET monitor_action_log=? WHERE id=?",
-                 (json.dumps(action_log, ensure_ascii=False), rec_id))
     conn.commit()
     conn.close()
-    return redirect(url_for("detail", rec_id=rec_id))
+    return redirect(url_for("monitor"))
 
 
 @app.route("/rec/<int:rec_id>/close", methods=["POST"])
@@ -994,15 +1847,27 @@ def chart_data(rec_id):
     conn.close()
     if not row:
         return jsonify({})
+
+    # Deduplicate: skip first snapshot if same date as created_at
+    snap_labels = [s["snapshot_date"] for s in snaps]
+    snap_prices = [s["price"] for s in snaps]
+    snap_pcts = [s["pct_change"] for s in snaps]
+
+    if snap_labels and snap_labels[0] == row["created_at"][:10]:
+        snap_labels = snap_labels[1:]
+        snap_prices = snap_prices[1:]
+        snap_pcts = snap_pcts[1:]
+
     return jsonify({
-        "labels": [row["created_at"]] + [s["snapshot_date"] for s in snaps],
-        "prices": [row["entry_price"]] + [s["price"] for s in snaps],
-        "pct": [0.0] + [s["pct_change"] for s in snaps],
+        "labels": [row["created_at"][:10]] + snap_labels,
+        "prices": [row["entry_price"]] + snap_prices,
+        "pct": [0.0] + snap_pcts,
         "entry": row["entry_price"],
     })
 
 
 @app.route("/api/refresh_prices", methods=["POST"])
+@csrf.exempt
 def refresh_prices():
     conn = get_db()
     recs = conn.execute(
@@ -1020,6 +1885,12 @@ def refresh_prices():
             return f"{t}.SH" if (t.startswith('6') or t.startswith('688')) else f"{t}.SZ"
         return f"{t}.US"
 
+    try:
+        lb = LongbridgeClient()
+    except LongbridgeNotConfigured as exc:
+        conn.close()
+        return jsonify({"error": str(exc)}), 503
+
     today_date = date.today()
     updated = 0
     errors = []
@@ -1034,18 +1905,17 @@ def refresh_prices():
 
         sym = lb_symbol(r["ticker"], r["market"])
         rec_id = r["id"]
-        entry_price = r["entry_price"]
+        entry_price = _to_float(r["entry_price"])
+        if not entry_price:
+            continue
 
         # Days from recommendation date to today, +10 buffer for weekends/holidays
         count = (today_date - start).days + 10
         count = max(count, 5)
 
         try:
-            result = subprocess.run(
-                ["longbridge", "kline", sym, "--period=1d", f"--count={count}"],
-                capture_output=True, text=True, timeout=20
-            )
-        except Exception as e:
+            candles = lb.candlesticks(sym, count)
+        except Exception:
             errors.append(sym)
             continue
 
@@ -1053,18 +1923,11 @@ def refresh_prices():
             "SELECT snapshot_date FROM price_snapshots WHERE recommendation_id=?", (rec_id,)
         ).fetchall()}
 
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if not line.startswith('|'):
-                continue
-            parts = [p.strip() for p in line.split('|')]
-            # kline columns: | Time | Open | High | Low | Close | Volume | Turnover |
-            if len(parts) < 6 or not parts[1] or parts[1].startswith('-') or parts[1] == 'Time':
-                continue
+        for candle in candles:
             try:
-                snap_date = parts[1][:10]
-                close_price = float(parts[5])
-            except (ValueError, IndexError):
+                snap_date = _candle_date(candle["timestamp"])
+                close_price = float(candle["close"])
+            except (KeyError, TypeError, ValueError):
                 continue
 
             if snap_date < r["created_at"]:
@@ -1090,10 +1953,51 @@ def refresh_prices():
     return jsonify({"updated": updated, "errors": errors})
 
 
+def _refresh_ai_infra_data(lb):
+    candles_by_symbol = {}
+    for symbol in AI_INFRA_SYMBOLS:
+        candles_by_symbol[symbol] = lb.candlesticks(symbol, 70)
+    result = calculate_ai_infra_signal(candles_by_symbol)
+
+    checked_at = datetime.now().isoformat(timespec="seconds")
+    conn = get_db()
+    _ensure_ai_monitor_table(conn)
+    conn.execute(
+        "INSERT OR REPLACE INTO ai_infra_monitor "
+        "(id, checked_at, signal, score, summary, data_json) VALUES (1,?,?,?,?,?)",
+        (
+            checked_at,
+            result["signal"],
+            result["score"],
+            result["summary"],
+            json.dumps(result, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
+    conn.close()
+    result["checked_at"] = checked_at
+    return result
+
+
+@app.route("/api/refresh_ai_infra", methods=["POST"])
+def refresh_ai_infra():
+    """Refresh the AI-infrastructure re-entry monitor from Longbridge daily bars."""
+    try:
+        result = _refresh_ai_infra_data(LongbridgeClient())
+    except LongbridgeNotConfigured as exc:
+        return jsonify({"error": str(exc)}), 503
+    except Exception as exc:
+        return jsonify({"error": f"AI 基础设施监控更新失败: {exc}"}), 502
+    return jsonify(result)
+
+
 # API endpoints for Claude to write directly
 @app.route("/api/add_session", methods=["POST"])
+@csrf.exempt
 def api_add_session():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
+    if not data.get("question"):
+        return jsonify({"error": "question is required"}), 400
     conn = get_db()
     cur = conn.execute(
         "INSERT INTO analysis_sessions (created_at, question, theme, market_context) VALUES (?,?,?,?)",
@@ -1107,8 +2011,14 @@ def api_add_session():
 
 
 @app.route("/api/add_rec", methods=["POST"])
+@csrf.exempt
 def api_add_rec():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
+    ticker = data.get("ticker", "").upper()
+    if not ticker:
+        return jsonify({"error": "ticker is required"}), 400
+    if not _validate_ticker(ticker):
+        return jsonify({"error": "invalid ticker"}), 400
     entry_price = float(data.get("entry_price", 0))
     framework = data.get("framework", "momentum")
     fw_def = FRAMEWORK_DEFAULTS.get(framework)
@@ -1116,8 +2026,8 @@ def api_add_rec():
         stop = round(entry_price * fw_def["stop_pct"], 4)
         t1   = round(entry_price * fw_def["target_pct"], 4)
     else:
-        stop = data.get("stop_loss_price")
-        t1   = data.get("target1_price")
+        stop = _to_float(data.get("stop_loss_price"))
+        t1   = _to_float(data.get("target1_price"))
     conn = get_db()
     cur = conn.execute(
         """INSERT INTO recommendations
@@ -1125,19 +2035,20 @@ def api_add_rec():
             stop_loss_price, target1_price, signals,
             conviction, source_type, notes,
             entry_rec, risk_level, hold_period, strategy_type,
-            catalyst, wait_price, wait_condition, validity_date)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            catalyst, wait_price, wait_condition, validity_date, monitor_direction)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (data.get("is_bought", 0), data.get("is_paper", 0),
          data.get("session_id"), data.get("created_at", str(date.today())),
-         data["ticker"].upper(), data.get("market", "US"),
+         ticker, data.get("market", "US"),
          framework, entry_price, stop, t1,
          json.dumps(data.get("signals", []), ensure_ascii=False),
-         data.get("conviction", 3), data.get("source_type", "paper"),
+         int(data.get("conviction", 3) or 3), data.get("source_type", "paper"),
          data.get("notes", ""),
          data.get("entry_rec", "watch"), data.get("risk_level", "medium"),
          data.get("hold_period", "short"), data.get("strategy_type", "momentum"),
-         data.get("catalyst", ""), data.get("wait_price"),
-         data.get("wait_condition", ""), data.get("validity_date")),
+         data.get("catalyst", ""), _to_float(data.get("wait_price")),
+         data.get("wait_condition", ""), data.get("validity_date"),
+         data.get("monitor_direction", "") or ""),
     )
     rec_id = cur.lastrowid
     conn.commit()
@@ -1170,14 +2081,12 @@ def catalysts():
 
     for r in all_cats:
         r["type_label"] = CATALYST_TYPES.get(r["event_type"], r["event_type"])
+        r["event_scope"] = infer_event_scope(r)
+        r["scope_label"] = {"company": "个股", "sector": "板块", "macro": "宏观"}.get(r["event_scope"], "事件")
         try:
             r["days_until"] = (date.fromisoformat(r["event_date"]) - today).days
         except Exception:
             r["days_until"] = None
-        try:
-            r["meta"] = json.loads(r.get("meta") or "{}")
-        except Exception:
-            r["meta"] = {}
         tickers_raw = conn.execute(
             "SELECT * FROM catalyst_tickers WHERE catalyst_id=?", (r["id"],)
         ).fetchall()
@@ -1186,60 +2095,15 @@ def catalysts():
             td = dict(t)
             td["latest_price"] = prices.get(td["ticker"])
             td["entry_price"]  = entries.get(td["ticker"])
-            if td["latest_price"] and td["entry_price"]:
+            lp = _to_float(td["latest_price"])
+            ep = _to_float(td["entry_price"])
+            if lp and ep:
                 td["pct_from_entry"] = round(
-                    (td["latest_price"] - td["entry_price"]) / td["entry_price"] * 100, 1)
+                    (lp - ep) / ep * 100, 1)
             else:
                 td["pct_from_entry"] = None
             r["tickers"].append(td)
 
-    # Macro events with parsed review_dates
-    macro_events_raw = [dict(r) for r in conn.execute(
-        "SELECT * FROM macro_events WHERE status='active' ORDER BY created_at DESC"
-    ).fetchall()]
-    macro_events = []
-    macro_cal_events = []  # flat list for calendar: {date, label, macro_id, color:'macro'}
-    for ev in macro_events_raw:
-        try:
-            tickers_list = json.loads(ev["related_tickers"]) if ev["related_tickers"] else []
-        except Exception:
-            tickers_list = [t.strip() for t in ev.get("related_tickers","").split(",") if t.strip()]
-        ev["tickers_list"] = tickers_list
-        dates_parsed = []
-        rd_raw = ev.get("review_dates") or ""
-        # Try JSON format first (from monitor form)
-        try:
-            rd_json = json.loads(rd_raw)
-            for entry in rd_json:
-                d_str = entry.get("date","")[:10]
-                label = entry.get("label","")
-                try:
-                    d = date.fromisoformat(d_str)
-                    days_left = (d - today).days
-                    dates_parsed.append({"date": d_str, "label": label, "days_left": days_left,
-                                         "is_due": 0 <= days_left <= 7, "is_past": days_left < 0})
-                    if days_left >= 0:
-                        macro_cal_events.append({"date": d_str, "label": label, "macro_id": ev["id"]})
-                except Exception:
-                    pass
-        except Exception:
-            # Fall back to line-by-line format: "YYYY-MM-DD 说明"
-            for line in rd_raw.splitlines():
-                parts = line.strip().split(" ", 1)
-                if len(parts) >= 1 and parts[0]:
-                    d_str = parts[0][:10]
-                    label = parts[1] if len(parts) > 1 else ""
-                    try:
-                        d = date.fromisoformat(d_str)
-                        days_left = (d - today).days
-                        dates_parsed.append({"date": d_str, "label": label, "days_left": days_left,
-                                             "is_due": 0 <= days_left <= 7, "is_past": days_left < 0})
-                        if days_left >= 0:
-                            macro_cal_events.append({"date": d_str, "label": label, "macro_id": ev["id"]})
-                    except Exception:
-                        pass
-        ev["dates_parsed"] = sorted(dates_parsed, key=lambda x: x["date"])
-        macro_events.append(ev)
     conn.close()
 
     review_ids   = set()
@@ -1256,7 +2120,7 @@ def catalysts():
     past       = [r for r in all_cats
                   if r["status"] in ("happened", "skipped") and r["id"] not in review_ids]
 
-    # Calendar events: catalyst dates (blue) + macro dates (orange)
+    # Calendar events: catalyst dates (blue)
     cal_catalyst = [{"date": r["event_date"], "title": r["title"], "type": r["event_type"],
                      "cat_id": r["id"]} for r in all_cats if r["status"] == "upcoming"]
 
@@ -1264,9 +2128,7 @@ def catalysts():
                            needs_review=needs_review, this_week=this_week,
                            this_month=this_month, later=later,
                            overdue=overdue, past=past,
-                           macro_events=macro_events,
                            cal_catalyst=cal_catalyst,
-                           macro_cal_events=macro_cal_events,
                            catalyst_types=CATALYST_TYPES,
                            today=str(today))
 
@@ -1276,6 +2138,7 @@ def catalyst_add():
     if request.method == "POST":
         title      = request.form.get("title", "").strip()
         event_type = request.form.get("event_type", "other")
+        event_scope= request.form.get("event_scope", "macro")
         event_date = request.form.get("event_date", str(date.today()))
         description= request.form.get("description", "").strip()
         tickers_raw= request.form.get("tickers", "").strip()
@@ -1283,26 +2146,13 @@ def catalyst_add():
         if not title:
             flash("标题不能为空", "warning")
             return redirect(url_for("catalyst_add"))
-        # ── Build type-specific meta ──
-        meta = {}
-        if event_type == "dividend":
-            meta["ex_div_date"]  = request.form.get("ex_div_date", "").strip()
-            meta["pay_date"]     = request.form.get("pay_date", "").strip()
-            meta["amount"]       = request.form.get("div_amount", "").strip()
-        elif event_type == "ipo":
-            meta["book_start"]   = request.form.get("book_start", "").strip()
-            meta["list_date"]    = request.form.get("list_date", "").strip()
-            meta["price_range"]  = request.form.get("price_range", "").strip()
-        elif event_type == "split":
-            meta["ratio"]        = request.form.get("split_ratio", "").strip()
-            meta["ex_date"]      = request.form.get("split_ex_date", "").strip()
-        elif event_type == "closed":
-            meta["reason"]       = request.form.get("close_reason", "").strip()
         conn = get_db()
         cur = conn.execute(
-            "INSERT INTO catalysts (title, event_type, event_date, description, status, created_at, updated_at, meta) "
-            "VALUES (?,?,?,?,'upcoming',?,?,?)",
-            (title, event_type, event_date, description, today_str, today_str, json.dumps(meta, ensure_ascii=False))
+            "INSERT INTO catalysts (title, event_type, event_scope, event_date, description, status, "
+            "source_name, last_checked_at, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,'upcoming','手动维护',?,?,?)",
+            (title, event_type, event_scope, event_date, description,
+             today_str, today_str, today_str)
         )
         cat_id = cur.lastrowid
         for t in [x.strip().upper() for x in tickers_raw.split(",") if x.strip()]:
@@ -1312,7 +2162,7 @@ def catalyst_add():
             )
         conn.commit()
         conn.close()
-        flash("催化剂已添加", "success")
+        flash("事件已添加", "success")
         return redirect(url_for("catalyst_detail", cat_id=cat_id))
     return render_template("catalyst_add.html",
                            catalyst_types=CATALYST_TYPES,
@@ -1325,14 +2175,12 @@ def catalyst_detail(cat_id):
     row = conn.execute("SELECT * FROM catalysts WHERE id=?", (cat_id,)).fetchone()
     if not row:
         conn.close()
-        flash("催化剂不存在", "danger")
+        flash("事件不存在", "danger")
         return redirect(url_for("catalysts"))
     row = dict(row)
     row["type_label"] = CATALYST_TYPES.get(row["event_type"], row["event_type"])
-    try:
-        row["meta"] = json.loads(row.get("meta") or "{}")
-    except Exception:
-        row["meta"] = {}
+    row["event_scope"] = infer_event_scope(row)
+    row["scope_label"] = {"company": "个股", "sector": "板块", "macro": "宏观"}.get(row["event_scope"], "事件")
     tickers = [dict(t) for t in conn.execute(
         "SELECT * FROM catalyst_tickers WHERE catalyst_id=?", (cat_id,)
     ).fetchall()]
@@ -1447,154 +2295,519 @@ def catalyst_quick_happened(cat_id):
     return jsonify({"ok": True})
 
 
-@app.route("/api/sync_earnings", methods=["POST"])
-def sync_earnings():
+CALENDAR_EVENT_META = {
+    "report": {"event_type": "earnings", "scope": "company", "label": "财报"},
+    "dividend": {"event_type": "dividend", "scope": "company", "label": "分红除息"},
+    "split": {"event_type": "split", "scope": "company", "label": "拆股/合股"},
+    "ipo": {"event_type": "ipo", "scope": "company", "label": "IPO"},
+    "macrodata": {"event_type": "macro", "scope": "macro", "label": "宏观数据"},
+}
+
+
+CALENDAR_FIELD_ZH = {
+    "previous": "前值", "estimate": "预测", "actual": "公布",
+    "estimate_eps": "预期 EPS", "estimate_revenue": "预期营收",
+    "actual_eps": "实际 EPS", "actual_revenue": "实际营收",
+}
+
+
+def _calendar_text_zh(value):
+    text = str(value or "")
+    replacements = {
+        "US Eastern": "美东时间", "U.S. Eastern": "美东时间",
+        "Pre-Market": "盘前", "Before Market": "盘前",
+        "After-Hours": "盘后", "After Market": "盘后",
+        "Earnings Release": "业绩披露", "Dividend": "分红",
+        "Stock Split": "拆股", "Initial Public Offering": "首次公开募股",
+    }
+    for source, target in replacements.items():
+        text = text.replace(source, target)
+    return text
+
+
+def _calendar_description(info):
+    parts = []
+    if info.get("date"):
+        parts.append(_calendar_text_zh(info["date"]))
+    if info.get("content"):
+        parts.append(_calendar_text_zh(info["content"]))
+    data = info.get("data") or {}
+    if data:
+        values = [f"{CALENDAR_FIELD_ZH.get(key, _calendar_text_zh(key))} {_calendar_text_zh(value)}"
+                  for key, value in data.items() if key and value not in (None, "", "--", "待公布")]
+        if values:
+            parts.append("；".join(values))
+    return " · ".join(dict.fromkeys(parts))
+
+
+def _sync_calendar_events(lb, categories=None):
+    """Persist Longbridge company and macro calendars for the next 180 days."""
     conn = get_db()
-    # Active tickers only
     recs = conn.execute(
-        "SELECT DISTINCT ticker FROM recommendations WHERE status='active'"
+        "SELECT DISTINCT ticker, market FROM recommendations WHERE status='active'"
     ).fetchall()
 
     today_str = str(date.today())
     end_str   = str(date.today() + timedelta(days=180))
-    added = 0
+    counts = {"added": 0, "updated": 0, "removed": 0, "skipped": 0, "errors": {}}
 
+    # Market closures are not actionable for this monitor; remove prior imports.
+    closed_rows = conn.execute(
+        "SELECT id FROM catalysts WHERE event_type='closed' AND source_name='长桥财经日历'"
+    ).fetchall()
+    for row in closed_rows:
+        conn.execute("DELETE FROM catalyst_tickers WHERE catalyst_id=?", (row["id"],))
+        conn.execute("DELETE FROM catalysts WHERE id=?", (row["id"],))
+    counts["removed"] = len(closed_rows)
+
+    symbols = []
+    raw_by_symbol = {}
     for rec in recs:
         raw_ticker = rec["ticker"]
-        # Normalize to Longbridge symbol format (TICKER.US)
-        if "." in raw_ticker:
-            lb_sym = raw_ticker
-        else:
-            lb_sym = raw_ticker + ".US"
-        # Skip non-US and ETFs that won't have earnings
-        if lb_sym.endswith(".HK") or lb_sym.endswith(".CN"):
+        market = (rec["market"] or "US").upper()
+        lb_sym = raw_ticker if "." in raw_ticker else f"{raw_ticker}.{market}"
+        if lb_sym.endswith(".US"):
+            if lb_sym not in symbols:
+                symbols.append(lb_sym)
+            raw_by_symbol[lb_sym] = raw_ticker
+
+    # Real positions are authoritative; local active recommendations extend the scope.
+    if hasattr(lb, "position_symbols"):
+        try:
+            for lb_sym in lb.position_symbols():
+                if lb_sym.endswith(".US") and lb_sym not in symbols:
+                    symbols.append(lb_sym)
+                raw_by_symbol.setdefault(lb_sym, lb_sym.split(".")[0])
+        except Exception as exc:
+            counts["errors"]["positions"] = str(exc)
+
+    wanted_categories = categories or tuple(CALENDAR_EVENT_META)
+    for category_index, category in enumerate(wanted_categories):
+        meta = CALENDAR_EVENT_META[category]
+        company_filtered = category in ("report", "dividend", "split")
+        if company_filtered and not symbols:
+            continue
+        if category_index and getattr(lb, "calendar_sync_delay", 0):
+            time.sleep(lb.calendar_sync_delay)
+        try:
+            data = lb.calendar(
+                category, today_str, end_str, market="US",
+                symbols=symbols if company_filtered else None,
+            )
+        except Exception as exc:
+            counts["errors"][category] = str(exc)
             continue
 
-        try:
-            result = subprocess.run(
-                ["longbridge", "finance-calendar", "report",
-                 "--symbol", lb_sym, "--start", today_str, "--end", end_str, "--format", "json"],
-                capture_output=True, text=True, timeout=10
-            )
-            if result.returncode != 0 or not result.stdout.strip():
-                continue
-            data = json.loads(result.stdout)
-            for item in data.get("list", []):
-                for info in item.get("infos", []):
-                    ev_date = item.get("date", "")[:10]
-                    if not ev_date:
-                        continue
-                    ext = info.get("ext", {}).get("financial_report", {})
-                    period = ext.get("period", "")
-                    fy     = ext.get("fiscal_year", "")
-                    title  = f"{raw_ticker} Q{period} FY{fy} 财报"
-                    # Check duplicate
-                    existing = conn.execute(
-                        "SELECT id FROM catalysts WHERE event_date=? AND event_type='earnings' "
-                        "AND id IN (SELECT catalyst_id FROM catalyst_tickers WHERE ticker=?)",
-                        (ev_date, raw_ticker)
-                    ).fetchone()
-                    if existing:
-                        continue
-                    cur = conn.execute(
-                        "INSERT INTO catalysts (title, event_type, event_date, description, status, created_at, updated_at) "
-                        "VALUES (?,?,?,?,'upcoming',?,?)",
-                        (title, "earnings", ev_date,
-                         info.get("content", ""), today_str, today_str)
+        for item in data.get("list", []):
+            for info in item.get("infos", []):
+                if category == "macrodata" and int(info.get("star") or 0) < 3:
+                    counts["skipped"] += 1
+                    continue
+                ev_date = str(item.get("date", ""))[:10]
+                if not ev_date:
+                    counts["skipped"] += 1
+                    continue
+                symbol = info.get("symbol") or ""
+                raw_ticker = raw_by_symbol.get(symbol) or (symbol.split(".")[0] if symbol else "")
+                identity = info.get("id") or f"{symbol}:{info.get('content', '')}"
+                external_id = f"longbridge:{category}:{identity}"
+                subject = raw_ticker or info.get("counter_name") or "美国"
+                title = f"{subject} {meta['label']}" if category != "macrodata" else _calendar_text_zh(info.get("content") or meta["label"])
+                description = _calendar_description(info)
+                existing = conn.execute(
+                    "SELECT id FROM catalysts WHERE external_id=?", (external_id,)
+                ).fetchone()
+                if existing:
+                    conn.execute(
+                        "UPDATE catalysts SET title=?, event_type=?, event_scope=?, event_date=?, description=?, "
+                        "source_name='长桥财经日历', last_checked_at=?, updated_at=? WHERE id=?",
+                        (title, meta["event_type"], meta["scope"], ev_date, description,
+                         today_str, today_str, existing["id"]),
                     )
+                    counts["updated"] += 1
+                    continue
+                cur = conn.execute(
+                    "INSERT INTO catalysts (title, event_type, event_scope, event_date, description, status, "
+                    "source_name, external_id, last_checked_at, created_at, updated_at) "
+                    "VALUES (?,?,?,?,?,'upcoming','长桥财经日历',?,?,?,?)",
+                    (title, meta["event_type"], meta["scope"], ev_date, description,
+                     external_id, today_str, today_str, today_str),
+                )
+                if raw_ticker and meta["scope"] == "company":
                     conn.execute(
                         "INSERT INTO catalyst_tickers (catalyst_id, ticker) VALUES (?,?)",
-                        (cur.lastrowid, raw_ticker)
+                        (cur.lastrowid, raw_ticker),
                     )
-                    added += 1
-        except Exception:
-            continue
+                counts["added"] += 1
 
     conn.commit()
     conn.close()
-    return jsonify({"added": added})
+    return counts
+
+
+def _sync_earnings_data(lb):
+    """Backward-compatible earnings-only sync used by older callers."""
+    return _sync_calendar_events(lb, categories=("report",))
+
+
+@app.route("/api/sync_earnings", methods=["POST"])
+def sync_earnings():
+    try:
+        result = _sync_calendar_events(LongbridgeClient())
+    except LongbridgeNotConfigured as exc:
+        return jsonify({"error": str(exc)}), 503
+    except Exception as exc:
+        return jsonify({"error": f"Longbridge calendar request failed: {exc}"}), 502
+    return jsonify(result)
 
 
 # ── Rotation Radar ────────────────────────────────────────────────────────────
 
+_market_data_lock = threading.RLock()
+_market_data_client = None
+_retired_market_data_clients = []
+_sector_data_cache = {"payload": None, "cached_at": 0.0}
+SECTOR_DATA_CACHE_SECONDS = 300
+
+
+def _is_closed_context_error(exc):
+    message = str(exc).lower()
+    return "context closed" in message or "client is closed" in message
+
+
+def _get_market_data_client(reconnect=False):
+    """Keep the SDK context alive for the Flask process and replace it on failure."""
+    global _market_data_client
+    if reconnect and _market_data_client is not None:
+        # Some SDK versions close shared runtime state when a context is garbage
+        # collected. Keep failed contexts referenced until process shutdown.
+        _retired_market_data_clients.append(_market_data_client)
+        _market_data_client = None
+    if _market_data_client is None:
+        _market_data_client = LongbridgeClient()
+    return _market_data_client
+
+
+def _stock_rows_for_themes():
+    conn = get_db()
+    rec_rows = conn.execute(
+        "SELECT * FROM recommendations ORDER BY created_at DESC"
+    ).fetchall()
+    positions, executions = _load_broker_data(conn)
+    conn.close()
+    return _build_stock_rows(enrich_rows(rec_rows), positions, executions)
+
+
+@app.route("/themes")
+def themes():
+    view = request.args.get("view", "rotation")
+    selected_theme = request.args.get("theme", "")
+    if selected_theme not in PRIMARY_THEMES:
+        selected_theme = ""
+
+    if view == "supply":
+        stock_states = {}
+        for row in _stock_rows_for_themes():
+            if row["lifecycle"] == "archived":
+                continue
+            stock_states[row["ticker_display"]] = {
+                "symbol": row["symbol"],
+                "label": row["lifecycle_info"][0],
+                "state": row["lifecycle"],
+                "theme": row["primary_theme"],
+            }
+        return render_template(
+            "supply_chain.html",
+            themes=PRIMARY_THEMES,
+            selected_theme=selected_theme,
+            stock_states=stock_states,
+        )
+
+    return render_template(
+        "rotation.html", themes=PRIMARY_THEMES, selected_theme=selected_theme
+    )
+
+
 @app.route("/rotation")
 def rotation():
-    conn = get_db()
-    # 1) Fetch all waves
-    rows = conn.execute("SELECT * FROM wave_config ORDER BY sort_order").fetchall()
-    waves = []
-    for r in rows:
-        w = dict(r)
-        w['tickers'] = json.loads(w['tickers']) if w['tickers'] else []
-        w['sc_node_ids'] = json.loads(w['sc_node_ids']) if w['sc_node_ids'] else []
+    return redirect(url_for("themes", view="rotation"))
 
-        # 2) Enrich each ticker with live recommendation data
-        enriched_tickers = []
-        for t in w['tickers']:
-            rec = conn.execute("""
-                SELECT r.id, r.ticker, r.entry_price, r.status, r.monitoring,
-                       r.monitor_status, r.is_bought, r.close_price, r.session_id,
-                       s.price as latest_price, s.snapshot_date
-                FROM recommendations r
-                LEFT JOIN price_snapshots s ON s.recommendation_id = r.id
-                WHERE r.ticker LIKE ? AND r.status != 'closed'
-                ORDER BY s.snapshot_date DESC LIMIT 1
-            """, (f"{t}.US",)).fetchone()
-            info = {'symbol': t, 'tracked': False}
-            if rec:
-                price = rec['latest_price'] or rec['close_price']
-                info.update({
-                    'tracked': True,
-                    'rec_id': rec['id'],
-                    'entry_price': rec['entry_price'],
-                    'current_price': price,
-                    'pnl_pct': calc_pct(rec['entry_price'], price),
-                    'monitoring': bool(rec['monitoring']),
-                    'monitor_status': rec['monitor_status'] or 'idle',
-                    'is_bought': bool(rec['is_bought']),
-                    'session_id': rec['session_id'],
-                })
-            enriched_tickers.append(info)
-        w['enriched_tickers'] = enriched_tickers
 
-        # 3) Fetch catalyst events for this wave's tickers
-        if w['tickers']:
-            ph = ','.join(['?'] * len(w['tickers']))
-            cat_rows = conn.execute(f"""
-                SELECT c.id, c.event_type, c.event_date, c.title, c.description,
-                       GROUP_CONCAT(ct.ticker) as tickers
-                FROM catalysts c
-                LEFT JOIN catalyst_tickers ct ON c.id = ct.catalyst_id
-                WHERE c.event_date >= date('now', '-30 days')
-                  AND EXISTS (
-                      SELECT 1 FROM catalyst_tickers ct2
-                      WHERE ct2.catalyst_id = c.id
-                        AND ct2.ticker IN ({ph})
-                  )
-                GROUP BY c.id ORDER BY c.event_date ASC
-            """, w['tickers']).fetchall()
+def _calculate_sector_data(lb):
+    """Build rotation signals from the same themes used by the stock list."""
+    stock_rows = _stock_rows_for_themes()
+    eligible = [r for r in stock_rows if r["lifecycle"] in {"holding", "watching"}]
+
+    members_by_theme = {theme: [] for theme in PRIMARY_THEMES}
+    holding_counts = {theme: 0 for theme in PRIMARY_THEMES}
+    watching_counts = {theme: 0 for theme in PRIMARY_THEMES}
+    for row in eligible:
+        theme = row["primary_theme"]
+        if theme not in members_by_theme:
+            continue
+        members_by_theme[theme].append(row["symbol"])
+        if row["lifecycle"] == "holding":
+            holding_counts[theme] += 1
         else:
-            cat_rows = []
-        w['catalysts'] = [dict(c) for c in cat_rows]
+            watching_counts[theme] += 1
 
-        waves.append(w)
+    proxies = [config["proxy"] for config in THEME_ROTATION_CONFIG.values()]
+    member_symbols = [symbol for members in members_by_theme.values() for symbol in members]
+    all_symbols = sorted(set(proxies + member_symbols + ["SPY.US"]))
+
+    # ── 1. Quotes (1D) ────────────────────────────────────────────
+    try:
+        quote_map = {q["symbol"]: q for q in lb.quotes(all_symbols)}
+    except Exception as exc:
+        if _is_closed_context_error(exc):
+            raise
+        quote_map = {}
+        for symbol in all_symbols:
+            try:
+                for quote in lb.quotes([symbol]):
+                    quote_map[quote["symbol"]] = quote
+            except Exception as retry_exc:
+                if _is_closed_context_error(retry_exc):
+                    raise
+                pass
+        if not quote_map:
+            raise RuntimeError(f"quote fetch failed: {exc}")
+
+    spy_1d = float(quote_map.get("SPY.US", {}).get("change_percentage", 0) or 0)
+
+    # ── 2. Klines (23 trading days = ~1 month) ────────────────────
+    kline_map = {}
+    for sym in all_symbols:
+        try:
+            candles = lb.candlesticks(sym, 23)
+            if candles:
+                kline_map[sym] = [float(c["close"]) for c in candles]
+        except Exception as exc:
+            if _is_closed_context_error(exc):
+                raise
+            pass
+
+    def pct_change(closes, n):
+        """n-day % change from the closes list (most recent last)."""
+        if len(closes) < n + 1:
+            return None
+        return (closes[-1] - closes[-(n+1)]) / closes[-(n+1)] * 100
+
+    spy_closes = kline_map.get("SPY.US", [])
+    spy_1w = pct_change(spy_closes, 5)
+    spy_1m = pct_change(spy_closes, 22)
+
+    def mean(values):
+        values = [value for value in values if value is not None]
+        return sum(values) / len(values) if values else None
+
+    def symbol_metrics(symbol):
+        quote = quote_map.get(symbol, {})
+        closes = kline_map.get(symbol, [])
+        return {
+            "chg_1d": float(quote.get("change_percentage", 0) or 0) if quote else None,
+            "chg_1w": pct_change(closes, 5),
+            "chg_1m": pct_change(closes, 22),
+            "chg_2w": pct_change(closes, 10),
+        }
+
+    # ── 3. Build result ───────────────────────────────────────────
+    result = []
+    for theme in PRIMARY_THEMES:
+        config = THEME_ROTATION_CONFIG[theme]
+        members = members_by_theme[theme]
+        valid_members = [symbol for symbol in members if symbol in kline_map]
+        calculation_symbols = valid_members or [config["proxy"]]
+        metrics = [symbol_metrics(symbol) for symbol in calculation_symbols]
+        chg_1d = mean([item["chg_1d"] for item in metrics])
+        chg_1w = mean([item["chg_1w"] for item in metrics])
+        chg_1m = mean([item["chg_1m"] for item in metrics])
+        chg_2w = mean([item["chg_2w"] for item in metrics])
+
+        rs_1d = round(chg_1d - spy_1d, 2) if chg_1d is not None else None
+        rs_1w = round(chg_1w - spy_1w, 2) if (chg_1w is not None and spy_1w is not None) else None
+        rs_1m = round(chg_1m - spy_1m, 2) if (chg_1m is not None and spy_1m is not None) else None
+        rs_2w = round(chg_2w - pct_change(spy_closes, 10), 2) if (chg_2w is not None and pct_change(spy_closes, 10) is not None) else None
+
+        # Rotation quadrant: x=RS_1M, y=RS_trend (1W RS vs 2W RS momentum)
+        rot_x = rs_1m
+        rot_y = round(rs_1w - rs_2w, 2) if (rs_1w is not None and rs_2w is not None) else None
+
+        result.append({
+            "symbol": theme,
+            "name": theme,
+            "proxy": config["proxy_name"],
+            "price": float(quote_map.get(config["proxy"], {}).get("last", 0) or 0),
+            "chg_1d": round(chg_1d, 2) if chg_1d is not None else None,
+            "chg_1w":  round(chg_1w, 2) if chg_1w is not None else None,
+            "chg_1m":  round(chg_1m, 2) if chg_1m is not None else None,
+            "rs_1d":   rs_1d,
+            "rs_1w":   rs_1w,
+            "rs_1m":   rs_1m,
+            "rot_x":   rot_x,
+            "rot_y":   rot_y,
+            "holding_count": holding_counts[theme],
+            "watching_count": watching_counts[theme],
+            "member_count": len(members),
+            "sample_count": len(valid_members),
+            "source": "portfolio" if valid_members else "proxy",
+        })
+
+    return {
+        "sectors": result,
+        "spy": {
+            "chg_1d": spy_1d,
+            "chg_1w": round(spy_1w, 2) if spy_1w is not None else None,
+            "chg_1m": round(spy_1m, 2) if spy_1m is not None else None,
+        },
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "stale": False,
+    }
+
+
+@app.route("/api/sector_data")
+def sector_data():
+    """Return cached theme rotation data and self-heal a closed SDK context."""
+    force_refresh = request.args.get("refresh") == "1"
+    now = time.time()
+    cached = _sector_data_cache["payload"]
+    if (
+        cached
+        and not force_refresh
+        and now - _sector_data_cache["cached_at"] < SECTOR_DATA_CACHE_SECONDS
+    ):
+        return jsonify(cached)
+
+    with _market_data_lock:
+        cached = _sector_data_cache["payload"]
+        now = time.time()
+        if (
+            cached
+            and not force_refresh
+            and now - _sector_data_cache["cached_at"] < SECTOR_DATA_CACHE_SECONDS
+        ):
+            return jsonify(cached)
+
+        last_error = None
+        for attempt in range(2):
+            try:
+                lb = _get_market_data_client(reconnect=attempt > 0)
+                payload = _calculate_sector_data(lb)
+                _sector_data_cache.update(payload=payload, cached_at=time.time())
+                return jsonify(payload)
+            except LongbridgeNotConfigured as exc:
+                last_error = exc
+                break
+            except Exception as exc:
+                last_error = exc
+                if not _is_closed_context_error(exc):
+                    break
+
+        if cached:
+            stale_payload = dict(cached)
+            stale_payload.update(
+                stale=True,
+                warning=f"实时行情暂不可用，显示最近成功数据：{last_error}",
+            )
+            return jsonify(stale_payload)
+        status = 503 if isinstance(last_error, LongbridgeNotConfigured) else 502
+        return jsonify({"error": f"行情获取失败：{last_error}"}), status
+
+
+@app.route("/api/market_calendar")
+def market_calendar():
+    """Return closed dates, dividends, IPOs and splits for the calendar widget."""
+    start_str = str(date.today())
+    end_str   = str(date.today() + timedelta(days=180))
+
+    conn = get_db()
+    tickers_raw = [r["ticker"] for r in conn.execute(
+        "SELECT DISTINCT ticker FROM recommendations WHERE status='active'"
+    ).fetchall()]
     conn.close()
 
-    # 4) Overall progress summary
-    total_progress = sum(w['progress_pct'] for w in waves) // len(waves) if waves else 0
-    active_wave = next((w for w in waves if w['status'] in ('active','early')), None)
+    # Normalize tickers to Longbridge format
+    us_tickers = []
+    for t in tickers_raw:
+        sym = t if "." in t else t + ".US"
+        if sym.endswith(".US"):
+            us_tickers.append(sym)
 
-    return render_template("rotation.html",
-                           waves=waves,
-                           total_progress=total_progress,
-                           active_wave=active_wave)
+    try:
+        lb = LongbridgeClient()
+    except LongbridgeNotConfigured as exc:
+        return jsonify({"error": str(exc)}), 503
+
+    def _calendar(category, market=None, symbols=None):
+        try:
+            return lb.calendar(
+                category, start_str, end_str, market=market, symbols=symbols
+            )
+        except Exception:
+            return {"list": []}
+
+    # Closed dates
+    closed = {}
+    data = _calendar("closed", market="US")
+    for item in data.get("list", []):
+        for info in item.get("infos", []):
+            closed[item["date"]] = info.get("content", "休市")
+
+    # Dividends for active US tickers (batch up to 10)
+    dividends = []
+    batch_size = 10
+    for i in range(0, len(us_tickers), batch_size):
+        batch = us_tickers[i:i + batch_size]
+        data = _calendar("dividend", market="US", symbols=batch)
+        for item in data.get("list", []):
+            for info in item.get("infos", []):
+                ticker = info.get("symbol", "").split(".")[0]
+                dividends.append({
+                    "date":    item["date"],
+                    "ticker":  ticker,
+                    "amount":  info.get("content", ""),
+                    "market":  info.get("market", "US"),
+                })
+
+    # IPOs — US market
+    ipos = []
+    data = _calendar("ipo", market="US")
+    for item in data.get("list", []):
+        for info in item.get("infos", []):
+            ipos.append({
+                "date":    item["date"],
+                "ticker":  info.get("symbol", "").split(".")[0],
+                "name":    info.get("counter_name", ""),
+                "content": info.get("content", ""),
+            })
+
+    # Splits — active US tickers
+    splits = []
+    for i in range(0, len(us_tickers), batch_size):
+        batch = us_tickers[i:i + batch_size]
+        data = _calendar("split", market="US", symbols=batch)
+        for item in data.get("list", []):
+            for info in item.get("infos", []):
+                ticker = info.get("symbol", "").split(".")[0]
+                splits.append({
+                    "date":    item["date"],
+                    "ticker":  ticker,
+                    "content": info.get("content", ""),
+                })
+
+    return jsonify({
+        "closed":    closed,
+        "dividends": dividends,
+        "ipos":      ipos,
+        "splits":    splits,
+    })
 
 
 # ── Supply Chain ──────────────────────────────────────────────────────────────
 
 @app.route("/supply-chain")
 def supply_chain():
-    return render_template("supply_chain.html")
+    return redirect(url_for("themes", view="supply"))
 
 
 # ── Monitor ───────────────────────────────────────────────────────────────────
@@ -1603,145 +2816,128 @@ def supply_chain():
 def monitor():
     conn = get_db()
     today = date.today()
+    _ensure_ai_monitor_table(conn)
 
-    # Macro events
-    macro_rows = [dict(r) for r in conn.execute(
-        "SELECT * FROM macro_events WHERE status='active' ORDER BY created_at DESC"
-    ).fetchall()]
-    for ev in macro_rows:
+    ai_row = conn.execute(
+        "SELECT checked_at, signal, score, summary, data_json "
+        "FROM ai_infra_monitor WHERE id=1"
+    ).fetchone()
+    ai_monitor = None
+    if ai_row:
         try:
-            ev["related_tickers_parsed"] = [t.strip() for t in json.loads(ev["related_tickers"]) if t.strip()] if ev["related_tickers"] else []
-        except Exception:
-            ev["related_tickers_parsed"] = [t.strip() for t in ev["related_tickers"].split(",") if t.strip()]
-        dates_parsed = []
-        for line in (ev["review_dates"] or "").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split(" ", 1)
-            if len(parts) < 1:
-                continue
-            d_str = parts[0]
-            label = parts[1] if len(parts) > 1 else ""
-            try:
-                d = date.fromisoformat(d_str)
-                days_left = (d - today).days
-                dates_parsed.append({
-                    "date": d_str, "label": label,
-                    "is_due": 0 <= days_left <= 7,
-                    "is_past": days_left < 0,
-                    "days_left": days_left,
-                })
-            except Exception:
-                continue
-        ev["review_dates_parsed"] = sorted(dates_parsed, key=lambda x: x["date"])
+            ai_monitor = json.loads(ai_row["data_json"])
+        except (json.JSONDecodeError, TypeError):
+            ai_monitor = {}
+        ai_monitor.update({
+            "key": "ai_infrastructure",
+            "name": "AI 基础设施",
+            "horizon": "近期（数日到数周）",
+            "checked_at": ai_row["checked_at"],
+            "signal": ai_row["signal"],
+            "score": ai_row["score"],
+            "summary": ai_row["summary"],
+        })
+    sector_monitors = [ai_monitor] if ai_monitor else []
 
-    # Recommendations with wait_price
+    # Only explicit, active monitors belong in the current-monitoring inbox.
+    # Include any rec with at least one price condition (wait/stop_loss/target).
     recs = conn.execute(
-        "SELECT * FROM recommendations WHERE wait_price IS NOT NULL AND wait_price > 0 AND status='active' ORDER BY created_at DESC"
+        "SELECT * FROM recommendations "
+        "WHERE monitoring=1 AND status='active' "
+        "AND (CAST(wait_price AS REAL) > 0 OR CAST(stop_loss_price AS REAL) > 0 OR CAST(target1_price AS REAL) > 0) "
+        "ORDER BY created_at DESC"
     ).fetchall()
     conn.close()
     recs = enrich_rows(recs)
 
-    triggered, approaching, watching, expired = [], [], [], []
+    triggered, approaching, watching, revalidate, expired = [], [], [], [], []
     for r in recs:
-        lp = r.get("latest_price")
-        wp = r.get("wait_price")
-        if not lp or not wp:
-            watching.append(r)
-            continue
-        gap_pct = abs((lp - wp) / wp * 100)
-        # Check validity expiry
-        vd = r.get("validity_date")
-        if vd:
-            try:
-                days_left = (date.fromisoformat(vd) - today).days
-                r["days_until_expiry"] = days_left
-                r["is_expired_validity"] = days_left < 0
-                r["is_expiring_soon"] = 0 <= days_left <= 7
-            except Exception:
-                r["is_expired_validity"] = False
-                r["is_expiring_soon"] = False
-        else:
-            r["is_expired_validity"] = False
-            r["is_expiring_soon"] = False
-
-        if r["is_expired_validity"]:
+        r = evaluate_price_monitor(r, today)
+        if r["monitor_state"] == "invalidated":
             expired.append(r)
-        elif gap_pct <= 3:
+        elif r["monitor_state"] == "revalidate":
+            revalidate.append(r)
+        elif r["monitor_state"] == "triggered":
             triggered.append(r)
-        elif gap_pct <= 10:
+        elif r["monitor_state"] == "approaching":
             approaching.append(r)
         else:
             watching.append(r)
 
-    all_count = len(triggered) + len(approaching) + len(watching)
+    all_count = len(triggered) + len(approaching) + len(watching) + len(revalidate) + len(expired)
 
-    # Catalyst events for Tab 3
-    cat_conn = get_db()
-    selected_status = request.args.get("cat_status", "")
-    selected_type = request.args.get("type", "")
-    cat_query = "SELECT c.*, GROUP_CONCAT(ct.ticker) as tickers FROM catalysts c LEFT JOIN catalyst_tickers ct ON c.id = ct.catalyst_id"
-    cat_wheres = []
-    cat_params = []
-    if selected_status:
-        cat_wheres.append("c.status = ?")
-        cat_params.append(selected_status)
-    if selected_type:
-        cat_wheres.append("c.event_type = ?")
-        cat_params.append(selected_type)
-    if cat_wheres:
-        cat_query += " WHERE " + " AND ".join(cat_wheres)
-    cat_query += " GROUP BY c.id ORDER BY c.event_date ASC"
-    catalyst_rows = [dict(r) for r in cat_conn.execute(cat_query, cat_params).fetchall()]
-    for cr in catalyst_rows:
-        cr["tickers"] = cr["tickers"].split(",") if cr["tickers"] else []
-    catalyst_count = cat_conn.execute("SELECT COUNT(*) FROM catalysts").fetchone()[0]
-    cat_conn.close()
+    # ── Event data split into company / sector / macro scopes ─────
+    conn2 = get_db()
+    prices2 = {}
+    entries2 = {}
+    for row in conn2.execute(
+        "SELECT r.ticker, r.entry_price, ps.price "
+        "FROM recommendations r "
+        "JOIN price_snapshots ps ON ps.recommendation_id=r.id "
+        "WHERE ps.snapshot_date=(SELECT MAX(s2.snapshot_date) FROM price_snapshots s2 WHERE s2.recommendation_id=r.id)"
+    ).fetchall():
+        prices2[row["ticker"]]  = row["price"]
+        entries2[row["ticker"]] = row["entry_price"]
+
+    all_cats = [dict(r) for r in conn2.execute(
+        "SELECT * FROM catalysts ORDER BY event_date ASC, id DESC"
+    ).fetchall()]
+    for r in all_cats:
+        r["event_scope"] = infer_event_scope(r)
+        r["type_label"] = CATALYST_TYPES.get(r["event_type"], r["event_type"])
+        try:
+            r["days_until"] = (date.fromisoformat(r["event_date"]) - today).days
+        except Exception:
+            r["days_until"] = None
+        tickers_raw = conn2.execute(
+            "SELECT * FROM catalyst_tickers WHERE catalyst_id=?", (r["id"],)
+        ).fetchall()
+        r["tickers"] = []
+        for t in tickers_raw:
+            td = dict(t)
+            td["latest_price"] = prices2.get(td["ticker"])
+            td["entry_price"]  = entries2.get(td["ticker"])
+            lp = _to_float(td["latest_price"])
+            ep = _to_float(td["entry_price"])
+            if lp and ep:
+                td["pct_from_entry"] = round(
+                    (lp - ep) / ep * 100, 1)
+            else:
+                td["pct_from_entry"] = None
+            r["tickers"].append(td)
+
+    conn2.close()
+
+    macro_events = [r for r in all_cats if r["event_scope"] == "macro"]
+    sector_events = [r for r in all_cats if r["event_scope"] == "sector"]
+    company_events = [r for r in all_cats if r["event_scope"] == "company"]
+    review_ids   = {r["id"] for r in macro_events if r["status"] == "happened" and not r.get("impact_score")}
+    needs_review = [r for r in macro_events if r["id"] in review_ids]
+    cat_this_week  = [r for r in macro_events if r["status"] == "upcoming" and r["days_until"] is not None and 0  <= r["days_until"] <= 7]
+    cat_this_month = [r for r in macro_events if r["status"] == "upcoming" and r["days_until"] is not None and 8  <= r["days_until"] <= 30]
+    cat_later      = [r for r in macro_events if r["status"] == "upcoming" and r["days_until"] is not None and r["days_until"] > 30]
+    cat_overdue    = [r for r in macro_events if r["status"] == "upcoming" and r["days_until"] is not None and r["days_until"] < 0]
+    cat_past       = [r for r in macro_events if r["status"] in ("happened", "skipped") and r["id"] not in review_ids]
+    macro_count = len([r for r in macro_events if r["status"] == "upcoming"])
+    cal_catalyst   = [{"date": r["event_date"], "title": r["title"], "type": r["event_type"], "cat_id": r["id"]}
+                      for r in all_cats if r["status"] == "upcoming"]
 
     return render_template("monitor.html",
                            triggered=triggered, approaching=approaching,
-                           watching=watching, expired=expired,
-                           macro_events=macro_rows, all_count=all_count,
+                           watching=watching, revalidate=revalidate, expired=expired,
+                           all_count=all_count,
                            monitor_action_reasons=MONITOR_ACTION_REASONS,
                            catalyst_types=CATALYST_TYPES,
-                           catalyst_rows=catalyst_rows,
-                           catalyst_count=catalyst_count,
-                           selected_status=selected_status,
-                           selected_type=selected_type)
-
-
-@app.route("/macro/add", methods=["POST"])
-def macro_add():
-    title   = request.form.get("title", "").strip()
-    thesis  = request.form.get("thesis", "").strip()
-    tickers = request.form.get("related_tickers", "").strip()
-    dates   = request.form.get("review_dates", "").strip()
-    if not title:
-        flash("标题不能为空", "warning")
-        return redirect(url_for("monitor"))
-    today_str = str(date.today())
-    conn = get_db()
-    conn.execute(
-        "INSERT INTO macro_events (title, thesis, related_tickers, review_dates, status, created_at, updated_at) "
-        "VALUES (?,?,?,?,'active',?,?)",
-        (title, thesis, tickers, dates, today_str, today_str)
-    )
-    conn.commit()
-    conn.close()
-    flash("宏观事件已添加", "success")
-    return redirect(url_for("monitor"))
-
-
-@app.route("/macro/<int:ev_id>/close", methods=["POST"])
-def macro_close(ev_id):
-    conn = get_db()
-    conn.execute("UPDATE macro_events SET status='closed', updated_at=? WHERE id=?",
-                 (str(date.today()), ev_id))
-    conn.commit()
-    conn.close()
-    flash("宏观事件已关闭", "success")
-    return redirect(url_for("monitor"))
+                           needs_review=needs_review,
+                           cat_this_week=cat_this_week, cat_this_month=cat_this_month,
+                           cat_later=cat_later, cat_overdue=cat_overdue, cat_past=cat_past,
+                           cal_catalyst=cal_catalyst,
+                           ai_monitor=ai_monitor,
+                           sector_monitors=sector_monitors,
+                           sector_events=sector_events,
+                           company_events=company_events,
+                           macro_count=macro_count,
+                           today=str(today))
 
 
 # ── Knowledge Base ────────────────────────────────────────────────────────────
@@ -1844,35 +3040,50 @@ def knowledge_delete(art_id):
     return redirect(url_for("knowledge"))
 
 
-# ── Notifications ─────────────────────────────────────────────────────────────
+# ── Notifications ─────────────────────────────────────────────────────
+
+def add_notification(title, message):
+    """Helper: insert a notification row."""
+    conn = get_db()
+    now = str(date.today())
+    conn.execute(
+        "INSERT INTO notifications (title, message, is_read, created_at) VALUES (?,?,0,?)",
+        (title, message, now)
+    )
+    conn.commit()
+    conn.close()
+
 
 @app.route("/api/notifications")
 def api_notifications():
     conn = get_db()
-    rows = conn.execute(
-        "SELECT * FROM notifications ORDER BY created_at DESC LIMIT 50"
+    notifs = conn.execute(
+        "SELECT * FROM notifications ORDER BY created_at DESC"
     ).fetchall()
+    result = [dict(n) for n in notifs]
     conn.close()
-    return jsonify([dict(r) for r in rows])
+    return jsonify(result)
 
 
 @app.route("/api/notifications/count")
 def api_notifications_count():
     conn = get_db()
-    count = conn.execute("SELECT COUNT(*) FROM notifications WHERE is_read=0").fetchone()[0]
+    row = conn.execute(
+        "SELECT COUNT(*) as cnt FROM notifications WHERE is_read=0"
+    ).fetchone()
     conn.close()
-    return jsonify({"count": count})
+    return jsonify({"count": row["cnt"]})
 
 
 @app.route("/api/notifications/mark_read", methods=["POST"])
 def api_notifications_mark_read():
-    data = request.get_json(silent=True) or {}
-    ids  = data.get("ids", [])
+    data = request.get_json(force=True, silent=True) or {}
+    ids = data.get("ids", [])
     conn = get_db()
     if ids:
+        ph = ",".join("?" * len(ids))
         conn.execute(
-            "UPDATE notifications SET is_read=1 WHERE id IN ({})".format(",".join("?" * len(ids))),
-            ids
+            f"UPDATE notifications SET is_read=1 WHERE id IN ({ph})", ids
         )
     else:
         conn.execute("UPDATE notifications SET is_read=1")
@@ -1881,91 +3092,300 @@ def api_notifications_mark_read():
     return jsonify({"ok": True})
 
 
-# ── Market Calendar ────────────────────────────────────────────────────────────
+# ── AI Agent (P0: single agent + tool calling) ─────────────────────
 
-@app.route("/api/market_calendar")
-def market_calendar():
-    """Return closed dates, dividends, IPOs and splits for the calendar widget."""
-    start_str = str(date.today())
-    end_str   = str(date.today() + timedelta(days=180))
+@app.route("/agent")
+def agent_page():
+    from agent import config as agent_config
+
+    return render_template(
+        "agent.html",
+        llm_configured=agent_config.is_configured(),
+        llm_model=agent_config.llm_model(),
+    )
+
+
+@app.route("/api/agent/state")
+def api_agent_state():
+    from agent import config as agent_config, runtime as agent_runtime
 
     conn = get_db()
-    tickers_raw = [r["ticker"] for r in conn.execute(
-        "SELECT DISTINCT ticker FROM recommendations WHERE status='active'"
-    ).fetchall()]
-    conn.close()
+    try:
+        chats = [dict(r) for r in conn.execute(
+            "SELECT id, title, kind, created_at FROM agent_chats ORDER BY id DESC LIMIT 50"
+        ).fetchall()]
+        pending = [dict(r) for r in conn.execute(
+            "SELECT id, chat_id, tool_name, summary, status, created_at FROM pending_actions "
+            "WHERE status='pending' ORDER BY id DESC LIMIT 20"
+        ).fetchall()]
+        tokens = agent_runtime.tokens_used_today(conn)
+    finally:
+        conn.close()
+    return jsonify({
+        "llm": {"configured": agent_config.is_configured(), "model": agent_config.llm_model()},
+        "budget": {"used_today": tokens, "limit": agent_config.daily_token_budget()},
+        "chats": chats,
+        "pending": pending,
+    })
 
-    us_tickers = []
-    for t in tickers_raw:
-        sym = t if "." in t else t + ".US"
-        if sym.endswith(".US"):
-            us_tickers.append(sym)
 
-    def _lb_json(cmd_args, timeout=12):
+@app.route("/api/agent/chats", methods=["POST"])
+def api_agent_chats_create():
+    data = request.get_json(silent=True) or {}
+    title = (data.get("title") or "").strip()[:60] or (
+        f"对话 {datetime.now().strftime('%m-%d %H:%M')}"
+    )
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "INSERT INTO agent_chats (title, kind, created_at) VALUES (?,?,?)",
+            (title, "chat", datetime.now().isoformat(timespec="seconds")),
+        )
+        conn.commit()
+        return jsonify({"chat_id": cur.lastrowid, "title": title})
+    finally:
+        conn.close()
+
+
+@app.route("/api/agent/messages")
+def api_agent_messages():
+    chat_id = request.args.get("chat_id", type=int)
+    if not chat_id:
+        return jsonify({"messages": [], "pendings": []})
+    conn = get_db()
+    try:
+        messages = [dict(r) for r in conn.execute(
+            "SELECT id, role, content, tool_calls_json, created_at FROM agent_messages "
+            "WHERE chat_id=? ORDER BY id",
+            (chat_id,),
+        ).fetchall()]
+        pendings = [dict(r) for r in conn.execute(
+            "SELECT * FROM pending_actions WHERE chat_id=? ORDER BY id", (chat_id,)
+        ).fetchall()]
+    finally:
+        conn.close()
+    for item in messages:
         try:
-            r = subprocess.run(
-                ["longbridge", "finance-calendar"] + cmd_args + ["--format", "json"],
-                capture_output=True, text=True, timeout=timeout
+            item["tool_calls"] = json.loads(item.pop("tool_calls_json") or "[]")
+        except ValueError:
+            item["tool_calls"] = []
+    return jsonify({"messages": messages, "pendings": pendings})
+
+
+@app.route("/api/agent/chat", methods=["POST"])
+def api_agent_chat():
+    from agent import runtime as agent_runtime
+    from agent.config import AgentNotConfigured, BudgetExceeded
+
+    data = request.get_json(silent=True) or {}
+    message = (data.get("message") or "").strip()
+    if not message or len(message) > 12000:
+        return jsonify({"error": "message is required and must be <= 12000 characters"}), 400
+    conn = get_db()
+    try:
+        chat_id = data.get("chat_id")
+        if not chat_id:
+            title = message[:24] + ("…" if len(message) > 24 else "")
+            cur = conn.execute(
+                "INSERT INTO agent_chats (title, kind, created_at) VALUES (?,?,?)",
+                (title, "chat", datetime.now().isoformat(timespec="seconds")),
             )
-            if r.returncode == 0 and r.stdout.strip():
-                return json.loads(r.stdout)
-        except Exception:
-            pass
-        return {"list": []}
+            conn.commit()
+            chat_id = cur.lastrowid
+        from agent import config as agent_config, tasks as agent_tasks
+        agent_config.require_configured()
+        agent_runtime.check_budget(conn)
+        if not conn.execute("SELECT 1 FROM agent_chats WHERE id=?", (int(chat_id),)).fetchone():
+            return jsonify({"error": "chat not found"}), 404
+        conn.execute("BEGIN IMMEDIATE")
+        active = conn.execute("SELECT id FROM agent_tasks WHERE chat_id=? AND status IN ('queued','running','retrying','waiting_approval') LIMIT 1", (int(chat_id),)).fetchone()
+        if active:
+            conn.rollback()
+            return jsonify({"error": "该会话尚有任务或审批未处理", "task_id": active["id"]}), 409
+        task_id = agent_tasks.create_task(conn, "chat", "research", {"message": message, "chat_id": int(chat_id)})
+        conn.execute("UPDATE agent_tasks SET chat_id=? WHERE id=?", (int(chat_id), task_id))
+        conn.commit()
+        return jsonify({"task_id": task_id, "chat_id": chat_id, "status": "queued"}), 202
+    except AgentNotConfigured as exc:
+        return jsonify({"error": str(exc)}), 503
+    except BudgetExceeded as exc:
+        return jsonify({"error": str(exc)}), 429
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502
+    finally:
+        conn.close()
 
-    # Closed dates
-    closed = {}
-    data = _lb_json(["closed", "--market", "US", "--start", start_str, "--end", end_str])
-    for item in data.get("list", []):
-        for info in item.get("infos", []):
-            closed[item["date"]] = info.get("content", "休市")
 
-    # Dividends for active US tickers (batched)
-    dividends = []
-    for i in range(0, len(us_tickers), 10):
-        batch = us_tickers[i:i + 10]
-        args  = ["dividend", "--start", start_str, "--end", end_str]
-        for sym in batch:
-            args += ["--symbol", sym]
-        data = _lb_json(args)
-        for item in data.get("list", []):
-            for info in item.get("infos", []):
-                raw_id = info.get("counter_id", "")
-                dividends.append({
-                    "date":   item["date"],
-                    "ticker": raw_id.split("/")[-1] if raw_id else "",
-                    "amount": info.get("content", ""),
-                })
+@app.route("/api/agent/pending/<int:pending_id>/resolve", methods=["POST"])
+def api_agent_pending_resolve(pending_id):
+    from agent import runtime as agent_runtime
+    from agent import tasks as agent_tasks
 
-    # IPOs
-    ipos = []
-    data = _lb_json(["ipo", "--market", "US", "--start", start_str, "--end", end_str])
-    for item in data.get("list", []):
-        for info in item.get("infos", []):
-            ipos.append({
-                "date":    item["date"],
-                "ticker":  info.get("counter_id", "").split("/")[-1],
-                "name":    info.get("counter_name", ""),
-                "content": info.get("content", ""),
-            })
+    data = request.get_json(silent=True) or {}
+    if data.get("action") not in {"approve", "reject"}:
+        return jsonify({"error": "action must be approve or reject"}), 400
+    approve = data["action"] == "approve"
+    conn = get_db()
+    try:
+        row = agent_runtime.resolve_pending_action(conn, pending_id, approve)
+        if row and row.get("changed") and row.get("task_id"):
+            task = agent_tasks.on_pending_resolved(
+                conn, row["chat_id"], approve, reject_summary=(data.get("reason") or "")[:1000], task_id=row["task_id"]
+            )
+            if task:
+                row["task"] = task
+    finally:
+        conn.close()
+    if not row:
+        return jsonify({"error": "pending action not found"}), 404
+    return jsonify({"pending": row})
 
-    # Splits for active US tickers
-    splits = []
-    for i in range(0, len(us_tickers), 10):
-        batch = us_tickers[i:i + 10]
-        args  = ["split", "--start", start_str, "--end", end_str]
-        for sym in batch:
-            args += ["--symbol", sym]
-        data = _lb_json(args)
-        for item in data.get("list", []):
-            for info in item.get("infos", []):
-                splits.append({
-                    "date":    item["date"],
-                    "ticker":  info.get("counter_id", "").split("/")[-1],
-                    "content": info.get("content", ""),
-                })
 
-    return jsonify({"closed": closed, "dividends": dividends, "ipos": ipos, "splits": splits})
+@app.route("/api/agent/events")
+def api_agent_events():
+    from agent import events as agent_events
+
+    conn = get_db()
+    try:
+        events = agent_events.list_events(conn, limit=30)
+    finally:
+        conn.close()
+    return jsonify({"events": events})
+
+
+@app.route("/api/agent/tasks")
+def api_agent_tasks():
+    from agent import tasks as agent_tasks
+
+    status = request.args.get("status", "") or None
+    conn = get_db()
+    try:
+        tasks = agent_tasks.list_tasks(conn, limit=50, status=status)
+    finally:
+        conn.close()
+    return jsonify({"tasks": tasks})
+
+
+@app.route("/api/agent/metrics")
+def api_agent_metrics():
+    from agent import eval as agent_eval, metrics as agent_metrics
+
+    conn = get_db()
+    try:
+        online = agent_metrics.metrics(conn)
+        latest = agent_eval.get_latest_run(conn)
+        baseline = agent_eval.get_baseline(conn)
+        offline = None
+        if latest:
+            offline = json.loads(latest["metrics_json"] or "{}")
+            offline["run_id"] = latest["id"]
+            offline["created_at"] = latest["created_at"]
+            offline["is_baseline"] = bool(latest["is_baseline"])
+            if baseline and baseline["id"] != latest["id"]:
+                base_metrics = json.loads(baseline["metrics_json"] or "{}")
+                offline["baseline_diff"] = agent_eval._diff_windows(
+                    offline.get("windows") or {}, base_metrics.get("windows") or {}
+                )
+    finally:
+        conn.close()
+    return jsonify({"online": online, "offline": offline})
+
+
+@app.route("/api/agent/events/scan", methods=["POST"])
+@csrf.exempt
+def api_agent_events_scan():
+    """Manual event scan: scan → dispatch → run queued tasks."""
+    from agent import events as agent_events
+    from agent import workflow as agent_workflow
+
+    conn = get_db()
+    try:
+        scanned = agent_events.scan_events(conn)
+        dispatched = agent_events.process_events(conn, limit=10)
+        ran = []  # execution belongs to the worker, never a web request
+        return jsonify({
+            "scanned": scanned,
+            "dispatched": len(dispatched),
+            "ran": [{"task_id": task_id, "status": status} for task_id, status in ran],
+        })
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502
+    finally:
+        conn.close()
+
+
+@app.route("/api/agent/workflows/<wf>/run", methods=["POST"])
+def api_agent_workflow_run(wf):
+    """Manually trigger a workflow (review / research). Synchronous."""
+    from agent import workflow as agent_workflow
+
+    data = request.get_json(silent=True) or {}
+    if wf not in agent_workflow.WORKFLOWS:
+        return jsonify({"error": f"unknown workflow: {wf}"}), 400
+    payload = {}
+    if wf == "research":
+        ticker = (data.get("ticker") or "").strip().upper()
+        if not ticker:
+            return jsonify({"error": "ticker is required for research"}), 400
+        payload = {"ticker": ticker}
+    elif wf == "review":
+        payload = {"ticker": (data.get("ticker") or "").strip().upper()}
+    conn = get_db()
+    try:
+        from agent import config as agent_config, tasks as agent_tasks
+        agent_config.require_configured()
+        task_id = agent_tasks.create_task(conn, wf, agent_workflow.route_agent_type(wf), payload)
+        return jsonify({"task": agent_tasks.get_task(conn, task_id), "task_id": task_id}), 202
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502
+    finally:
+        conn.close()
+
+
+@app.route("/api/agent/morning_report", methods=["POST"])
+@csrf.exempt
+def api_agent_morning_report():
+    from agent import config as agent_config, tasks as agent_tasks
+    from agent.config import AgentNotConfigured
+    conn = get_db()
+    try:
+        agent_config.require_configured()
+        task_id = agent_tasks.create_task(conn, "morning", "monitor")
+        return jsonify({"task_id": task_id, "status": "queued"}), 202
+    except AgentNotConfigured as exc:
+        return jsonify({"error": str(exc)}), 503
+    finally:
+        conn.close()
+
+
+@app.route("/api/agent/tasks/<int:task_id>/cancel", methods=["POST"])
+def api_agent_task_cancel(task_id):
+    from agent import tasks as agent_tasks
+    conn = get_db()
+    try:
+        task = agent_tasks.terminate_task(conn, task_id, "cancelled", "用户取消任务")
+        return (jsonify({"task": task}), 200) if task else (jsonify({"error": "task not found"}), 404)
+    finally:
+        conn.close()
+
+
+@app.route("/api/agent/tasks/<int:task_id>")
+def api_agent_task_detail(task_id):
+    from agent import tasks as agent_tasks
+    conn = get_db()
+    try:
+        task = agent_tasks.get_task(conn, task_id)
+        if not task:
+            return jsonify({"error": "task not found"}), 404
+        task["result"] = json.loads(task.get("result") or "{}")
+        task["steps"] = [dict(row) for row in conn.execute("SELECT name,status,detail,created_at FROM agent_task_steps WHERE task_id=? ORDER BY id", (task_id,))]
+        if task.get("run_id"):
+            task["tool_calls"] = [dict(row) for row in conn.execute(
+                "SELECT tool_name AS name,status,duration_ms,result_summary AS summary FROM agent_tool_calls WHERE run_id=? ORDER BY id", (task["run_id"],))]
+        return jsonify({"task": task})
+    finally:
+        conn.close()
+
 
 
 if __name__ == "__main__":

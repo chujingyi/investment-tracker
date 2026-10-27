@@ -80,8 +80,16 @@
                    value="{{ row.catalyst or '' }}"
                    placeholder="一句话概括催化剂">
           </div>
-          <div class="col-sm-5">
-            <label class="form-label">等待价格（等回落到）</label>
+          <div class="col-sm-3">
+            <label class="form-label">监控方向</label>
+            <select name="monitor_direction" class="form-select">
+              <option value="pullback" {{ 'selected' if (row.monitor_direction or '') == 'pullback' }}>回落到价</option>
+              <option value="breakout" {{ 'selected' if (row.monitor_direction or '') == 'breakout' }}>向上突破</option>
+              <option value="" {{ 'selected' if not row.monitor_direction }}>自动判断</option>
+            </select>
+          </div>
+          <div class="col-sm-4">
+            <label class="form-label">价格条件</label>
             <div class="input-group">
               <span class="input-group-text">$</span>
               <input type="number" name="wait_price" class="form-control" step="0.01"
@@ -89,7 +97,7 @@
                      placeholder="0.00">
             </div>
           </div>
-          <div class="col-sm-7">
+          <div class="col-sm-5">
             <label class="form-label">等待条件说明</label>
             <input type="text" name="wait_condition" class="form-control"
                    value="{{ row.wait_condition or '' }}"

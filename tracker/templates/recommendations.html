@@ -1,16 +1,42 @@
 {% extends "base.html" %}
-{% block title %}所有推荐{% endblock %}
+{% block title %}股票全流程{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-3">
-  <h5 class="fw-bold mb-0">所有推荐记录</h5>
-  <a href="{{ url_for('add') }}" class="btn btn-success btn-sm">
-    <i class="bi bi-plus me-1"></i>记录推荐
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <div>
+    <h5 class="fw-bold mb-1">股票全流程</h5>
+    <div class="text-muted" style="font-size:.8rem;">从框架选标、观察、实盘持有到清仓，每只股票只保留一行。</div>
+  </div>
+  <div class="d-flex gap-2">
+    <form method="post" action="{{ url_for('sync_stocks') }}">
+      <button type="submit" class="btn btn-outline-primary btn-sm">
+        <i class="bi bi-arrow-repeat me-1"></i>同步长桥
+      </button>
+    </form>
+    <a href="{{ url_for('add') }}" class="btn btn-success btn-sm">
+      <i class="bi bi-plus me-1"></i>加入观察
+    </a>
+  </div>
+</div>
+
+<div class="stock-tabs mb-3">
+  <a href="{{ url_for('recommendations') }}" class="stock-tab {{ 'active' if not selected_lifecycle }}">
+    全部 <span>{{ tab_counts.all }}</span>
+  </a>
+  <a href="{{ url_for('recommendations', lifecycle='watching') }}" class="stock-tab {{ 'active' if selected_lifecycle == 'watching' }}">
+    自选 <span>{{ tab_counts.watching }}</span>
+  </a>
+  <a href="{{ url_for('recommendations', lifecycle='holding') }}" class="stock-tab {{ 'active' if selected_lifecycle == 'holding' }}">
+    持仓 <span>{{ tab_counts.holding }}</span>
+  </a>
+  <a href="{{ url_for('recommendations', lifecycle='history') }}" class="stock-tab {{ 'active' if selected_lifecycle == 'history' }}">
+    历史持仓 <span>{{ tab_counts.history }}</span>
   </a>
 </div>
 
 <div class="filter-bar mb-3">
   <form method="get" class="d-flex flex-wrap gap-2 align-items-center">
+    {% if selected_lifecycle %}<input type="hidden" name="lifecycle" value="{{ selected_lifecycle }}">{% endif %}
     <select name="entry_rec" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
       <option value="">全部建议</option>
       {% for k, v in entry_rec_map.items() %}
@@ -23,105 +49,81 @@
       <option value="{{ k }}" {{ 'selected' if selected_fw == k }}>{{ v }}</option>
       {% endfor %}
     </select>
-    <select name="status" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
-      <option value="">全部状态</option>
-      <option value="active"  {{ 'selected' if selected_status == 'active' }}>追踪中</option>
-      <option value="profit"  {{ 'selected' if selected_status == 'profit' }}>已止盈</option>
-      <option value="loss"    {{ 'selected' if selected_status == 'loss' }}>已止损</option>
-      <option value="closed"  {{ 'selected' if selected_status == 'closed' }}>已关闭</option>
-    </select>
-    <select name="bought" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
-      <option value="">全部买入</option>
-      <option value="real"  {{ 'selected' if selected_bought == 'real' }}>实盘已买</option>
-      <option value="paper" {{ 'selected' if selected_bought == 'paper' }}>模拟已买</option>
-      <option value="none"  {{ 'selected' if selected_bought == 'none' }}>未买</option>
-    </select>
-    <select name="source" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
-      <option value="">全部来源</option>
-      <option value="paper" {{ 'selected' if selected_source == 'paper' }}>模拟</option>
-      <option value="real"  {{ 'selected' if selected_source == 'real' }}>真实</option>
-    </select>
     <select name="theme" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
       <option value="">全部主题</option>
       {% for t in themes %}
       <option value="{{ t }}" {{ 'selected' if selected_theme == t }}>{{ t }}</option>
       {% endfor %}
     </select>
-    {% if selected_fw or selected_status or selected_entry or selected_bought or selected_source or selected_theme %}
+    {% if selected_fw or selected_status or selected_entry or selected_lifecycle or selected_theme %}
     <a href="{{ url_for('recommendations') }}" class="btn btn-outline-secondary btn-sm">
       <i class="bi bi-x me-1"></i>清除
     </a>
     {% endif %}
-    <span class="text-muted ms-auto" style="font-size:.8rem;">共 {{ total }} 条</span>
+    <span class="text-muted ms-auto" style="font-size:.8rem;">共 {{ total }} 只</span>
   </form>
 </div>
 
 {% if rows %}
 <div class="card">
   <div class="table-responsive">
-    <table class="table table-hover mb-0">
+    <table class="table table-hover mb-0 align-middle">
       <thead>
         <tr>
-          <th>日期</th>
           <th>股票</th>
-          <th>主题</th>
-          <th>入场建议</th>
-          <th>风险</th>
-          <th>周期</th>
-          <th>推荐时价</th>
-          <th>当前价</th>
-          <th>涨跌</th>
-          <th>是否已买</th>
           <th>状态</th>
+          <th>主题</th>
+          <th>当前判断</th>
+          <th>观察条件</th>
+          <th>当前价</th>
+          <th>实际持仓</th>
+          <th>盈亏</th>
+          <th>风控计划</th>
         </tr>
       </thead>
       <tbody>
         {% for r in rows %}
-        <tr style="cursor:pointer;" onclick="location.href='{{ url_for('detail', rec_id=r.id) }}'">
-          <td class="text-muted" style="font-size:.8rem; white-space:nowrap;">{{ r.created_at }}</td>
+        {% set detail_url = url_for('detail', rec_id=r.id) if r.has_recommendation else url_for('stock_detail', symbol=r.symbol) %}
+        <tr style="cursor:pointer;" onclick="location.href='{{ detail_url }}'">
           <td>
-            <a href="{{ url_for('detail', rec_id=r.id) }}" class="fw-bold" onclick="event.stopPropagation()">{{ r.ticker }}</a>
-            <small class="text-muted">{{ r.market }}</small>
-            {% if r.monitoring %}<span class="monitor-badge ms-1">🔔</span>{% endif %}
-            {% if r.is_expired_validity %}<span class="expiry-past ms-1">效期已过</span>
-            {% elif r.is_expiring_soon %}<span class="expiry-soon ms-1">即将到期</span>{% endif %}
+            <a href="{{ detail_url }}" class="fw-bold" onclick="event.stopPropagation()">{{ r.ticker_display }}</a>
+            <small class="text-muted">{{ r.market_display }}</small>
           </td>
-          <td>
-            {% if r.theme %}
-            {% for tag in r.theme.split(',') %}
-            <span class="theme-badge">{{ tag }}</span>
-            {% endfor %}
-            {% else %}<span class="text-muted" style="font-size:.75rem;">—</span>{% endif %}
-          </td>
-          <td>
-            {% set el = r.entry_rec_label %}
-            <span class="entry-badge {{ el[1] }}">{{ el[0] }}</span>
-          </td>
-          <td><span class="verdict-tag {{ r.risk_info[1] }}" style="font-size:.75rem; padding:.15em .5em;">{{ r.risk_info[0] }}</span></td>
-          <td><span style="font-size:.78rem; color:var(--text-muted);">{{ r.hold_label }}</span></td>
-          <td style="font-size:.875rem; font-weight:500;">${{ "%.2f"|format(r.entry_price) }}</td>
-          <td style="font-size:.875rem;">
-            {% if r.latest_price %}${{ "%.2f"|format(r.latest_price) }}
-            {% if r.days_since_update is not none and r.days_since_update >= 14 and r.status == 'active' %}
-            <div class="{{ 'stale-error' if r.days_since_update >= 30 else 'stale-warn' }}">{{ r.days_since_update }}d前</div>
+          <td><span class="lifecycle-badge {{ r.lifecycle_info[1] }}">{{ r.lifecycle_info[0] }}</span></td>
+          <td><span class="theme-badge">{{ r.primary_theme }}</span></td>
+          <td><span class="entry-badge {{ r.judgement_class }}">{{ r.judgement }}</span></td>
+          <td style="font-size:.78rem;max-width:220px;">
+            {% if r.lifecycle == 'holding' %}
+              {% if r.monitoring %}<span class="monitor-badge">🔔 持仓监控中</span>{% else %}<span class="text-muted">持仓跟踪</span>{% endif %}
+            {% elif r.lifecycle == 'sold' %}
+              <span class="text-muted">—</span>
+            {% else %}
+              {% if r.wait_condition %}<div>{{ r.wait_condition }}</div>{% endif %}
+              {% if r.wait_price %}<div class="text-muted">等待价 ${{ "%.2f"|format(r.wait_price) }}</div>{% endif %}
+              {% if r.monitoring %}<span class="monitor-badge mt-1">🔔 监控中</span>{% endif %}
+              {% if not r.wait_condition and not r.wait_price and not r.monitoring %}<span class="text-muted">—</span>{% endif %}
             {% endif %}
+          </td>
+          <td style="font-size:.875rem;white-space:nowrap;">
+            {% if r.current_price %}${{ "%.2f"|format(r.current_price) }}{% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td>
+            {% if r.lifecycle == 'holding' %}
+            <strong>{{ "%g"|format(r.quantity) }} 股</strong>
+            {% if r.cost_price is not none %}<div class="text-muted" style="font-size:.72rem;">成本 ${{ "%.2f"|format(r.cost_price) }}</div>{% endif %}
             {% else %}<span class="text-muted">—</span>{% endif %}
           </td>
           <td>
-            {% if r.pct_change is not none %}
-            <span class="{{ 'pct-pos' if r.pct_change > 0 else ('pct-neg' if r.pct_change < 0 else 'pct-zero') }}">
-              {{ "%+.1f"|format(r.pct_change) }}%
-            </span>
+            {% if r.display_pnl is not none %}
+            <div class="{{ 'pct-pos' if r.display_pnl >= 0 else 'pct-neg' }}">{{ '%+.2f'|format(r.display_pnl) }}</div>
+            {% if r.display_pnl_pct is not none %}<div class="text-muted" style="font-size:.72rem;">{{ '%+.1f'|format(r.display_pnl_pct) }}%</div>{% endif %}
             {% else %}<span class="text-muted">—</span>{% endif %}
           </td>
-          <td>
-            {% if r.is_paper %}<span class="badge-paper">模拟</span>{% endif %}
-            {% if r.is_bought %}<span class="badge-real">实盘</span>{% endif %}
-            {% if not r.is_paper and not r.is_bought %}
-            <span class="text-muted" style="font-size:.8rem;">未买</span>
-            {% endif %}
+          <td style="font-size:.76rem;white-space:nowrap;">
+            {% if r.stop_loss_price %}<div class="text-loss">止损 ${{ "%.2f"|format(r.stop_loss_price) }}</div>{% endif %}
+            {% if r.target1_price %}<div class="text-win">目标 ${{ "%.2f"|format(r.target1_price) }}</div>{% endif %}
+            {% if not r.stop_loss_price and not r.target1_price %}<span class="text-muted">—</span>{% endif %}
           </td>
-          <td><span class="badge-status status-{{ r.status }}">{{ r.status_label }}</span></td>
         </tr>
         {% endfor %}
       </tbody>
@@ -131,27 +133,16 @@
 {% else %}
 <div class="empty-state">
   <i class="bi bi-search d-block"></i>
-  <div class="fw-bold mb-1">没有符合条件的记录</div>
+  <div class="fw-bold mb-1">没有符合条件的股票</div>
   <a href="{{ url_for('recommendations') }}" class="btn btn-outline-secondary btn-sm mt-2">清除筛选</a>
 </div>
 {% endif %}
 
 {% if pages > 1 %}
-<div class="card mt-3">
-  <div class="pagination-bar">
-    <a href="?{{ filter_qs }}{% if filter_qs %}&{% endif %}page={{ page - 1 }}"
-       class="page-btn {% if page == 1 %}disabled{% endif %}">‹</a>
-    {% for p in range(1, pages + 1) %}
-      {% if p == 1 or p == pages or (p >= page - 2 and p <= page + 2) %}
-      <a href="?{{ filter_qs }}{% if filter_qs %}&{% endif %}page={{ p }}"
-         class="page-btn {% if p == page %}active{% endif %}">{{ p }}</a>
-      {% elif p == page - 3 or p == page + 3 %}
-      <span class="page-btn disabled">…</span>
-      {% endif %}
-    {% endfor %}
-    <a href="?{{ filter_qs }}{% if filter_qs %}&{% endif %}page={{ page + 1 }}"
-       class="page-btn {% if page == pages %}disabled{% endif %}">›</a>
-  </div>
-</div>
+<div class="card mt-3"><div class="pagination-bar">
+  {% for p in range(1, pages + 1) %}
+  <a href="?{{ filter_qs }}{% if filter_qs %}&{% endif %}page={{ p }}" class="page-btn {% if p == page %}active{% endif %}">{{ p }}</a>
+  {% endfor %}
+</div></div>
 {% endif %}
 {% endblock %}

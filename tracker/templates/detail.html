@@ -33,6 +33,7 @@
         <small class="text-muted">{{ row.market }}</small>
         {% if row.is_paper %}<span class="badge-paper">模拟</span>{% endif %}
         {% if row.is_bought %}<span class="badge-real">实盘</span>{% endif %}
+        <span class="lifecycle-badge {{ lifecycle_info[1] }}">{{ lifecycle_info[0] }}</span>
         {% if row.monitoring %}<span class="monitor-badge">🔔 监控中</span>{% endif %}
       </div>
       <div class="verdict-main">
@@ -134,6 +135,43 @@
           {% endif %}
         </div>
       </div>
+    </div>
+    {% endif %}
+
+    <!-- Longbridge position and executions (added to the original detail page) -->
+    {% if position or broker_trades %}
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-wallet2 me-1"></i>长桥实盘</span>
+        <span class="lifecycle-badge {{ lifecycle_info[1] }}">{{ lifecycle_info[0] }}</span>
+      </div>
+      {% if position %}
+      <div class="card-body p-3 border-bottom">
+        <div class="row g-2" style="font-size:.84rem;">
+          <div class="col-4"><div class="text-muted">持有数量</div><div class="fw-bold">{{ "%g"|format(position.quantity) }} 股</div></div>
+          <div class="col-4"><div class="text-muted">平均成本</div><div class="fw-bold">${{ "%.2f"|format(position.cost_price) }}</div></div>
+          <div class="col-4"><div class="text-muted">当前价</div><div class="fw-bold">{% if position.last_price %}${{ "%.2f"|format(position.last_price) }}{% else %}—{% endif %}</div></div>
+        </div>
+      </div>
+      {% endif %}
+      {% if broker_trades %}
+      <div class="table-responsive">
+        <table class="table table-sm mb-0 align-middle">
+          <thead><tr><th>时间</th><th>方向</th><th>数量</th><th>价格</th></tr></thead>
+          <tbody>
+            {% for trade in broker_trades %}
+            {% set is_buy = trade.side|lower == 'buy' %}
+            <tr>
+              <td class="text-muted" style="font-size:.76rem;">{{ trade.trade_done_at[:16].replace('T',' ') }}</td>
+              <td><span class="badge {{ 'bg-danger' if is_buy else 'bg-success' }}">{{ '买入' if is_buy else '卖出' }}</span></td>
+              <td>{{ "%g"|format(trade.quantity) }}</td>
+              <td>${{ "%.4f"|format(trade.price) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
     </div>
     {% endif %}
 
@@ -459,31 +497,64 @@
 fetch('/api/chart/{{ row.id }}').then(r => r.json()).then(data => {
   const ctx = document.getElementById('priceChart').getContext('2d');
   const entry = data.entry;
+  const trades = {{ broker_trades|tojson }};
+  const markerSeries = side => {
+    const result = data.labels.map(() => null);
+    trades.filter(t => String(t.side).toLowerCase() === side).forEach(t => {
+      const day = String(t.trade_done_at).slice(0, 10);
+      let best = 0;
+      let distance = Infinity;
+      data.labels.forEach((label, index) => {
+        const diff = Math.abs(new Date(label) - new Date(day));
+        if (diff < distance) { distance = diff; best = index; }
+      });
+      result[best] = Number(t.price);
+    });
+    return result;
+  };
+  const datasets = [{
+    label: '价格',
+    data: data.prices,
+    borderColor: '#0969da',
+    backgroundColor: 'rgba(9,105,218,.06)',
+    borderWidth: 2,
+    pointRadius: 4,
+    fill: true,
+    tension: 0.3,
+    pointBackgroundColor: data.prices.map((p, i) => {
+      if (i === 0) return '#656d76';
+      {% if row.stop_loss_price %}if (p <= {{ row.stop_loss_price }}) return '#cf222e';{% endif %}
+      {% if row.target1_price %}if (p >= {{ row.target1_price }}) return '#1a7f37';{% endif %}
+      return '#0969da';
+    }),
+  }];
+  if (trades.some(t => String(t.side).toLowerCase() === 'buy')) datasets.push({
+    label: '买入', data: markerSeries('buy'), showLine: false,
+    pointRadius: 7, pointHoverRadius: 9, pointStyle: 'triangle',
+    pointBackgroundColor: '#cf222e', pointBorderColor: '#fff', pointBorderWidth: 1.5
+  });
+  if (trades.some(t => String(t.side).toLowerCase() === 'sell')) datasets.push({
+    label: '卖出', data: markerSeries('sell'), showLine: false,
+    pointRadius: 7, pointHoverRadius: 9, pointStyle: 'rectRot',
+    pointBackgroundColor: '#1a7f37', pointBorderColor: '#fff', pointBorderWidth: 1.5
+  });
+  {% if position and position.cost_price %}
+  datasets.push({
+    label: '平均成本', data: data.labels.map(() => {{ position.cost_price }}),
+    borderColor: '#9a6700', borderDash: [6, 4], borderWidth: 1.5,
+    pointRadius: 0, fill: false
+  });
+  {% endif %}
   new Chart(ctx, {
     type: 'line',
     data: {
       labels: data.labels,
-      datasets: [{
-        label: '价格',
-        data: data.prices,
-        borderColor: '#0969da',
-        backgroundColor: 'rgba(9,105,218,.06)',
-        borderWidth: 2,
-        pointRadius: 4,
-        fill: true,
-        tension: 0.3,
-        pointBackgroundColor: data.prices.map((p, i) => {
-          if (i === 0) return '#656d76';
-          {% if row.stop_loss_price %}if (p <= {{ row.stop_loss_price }}) return '#cf222e';{% endif %}
-          {% if row.target1_price %}if (p >= {{ row.target1_price }}) return '#1a7f37';{% endif %}
-          return '#0969da';
-        }),
-      }]
+      datasets
     },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: {
-        legend: { display: false },
+        legend: { display: datasets.length > 1 },
         tooltip: {
           callbacks: {
             label: ctx => {

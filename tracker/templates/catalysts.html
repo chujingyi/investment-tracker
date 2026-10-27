@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}催化剂{% endblock %}
+{% block title %}事件日历{% endblock %}
 
 {% macro cat_card(r, show_quick) %}
 <div class="cat-card mb-2" id="cat-{{ r.id }}">
@@ -7,6 +7,7 @@
     <div class="flex-grow-1 me-2">
       <div class="d-flex align-items-center gap-2 mb-1 flex-wrap">
         <span class="cat-type-badge type-{{ r.event_type }}">{{ r.type_label }}</span>
+        <span class="badge bg-secondary">{{ r.scope_label }}</span>
         <span class="fw-semibold" style="font-size:.92rem;">{{ r.title }}</span>
         {% if r.days_until == 0 %}
         <span class="cat-days-chip chip-today">今天</span>
@@ -57,12 +58,12 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-3">
   <div>
-    <h5 class="fw-bold mb-0">催化剂</h5>
-    <div class="text-muted" style="font-size:.82rem;">事件驱动 · 催化剂 + 放量 = 进场信号</div>
+    <h5 class="fw-bold mb-0">事件日历</h5>
+    <div class="text-muted" style="font-size:.82rem;">宏观、板块与个股事件统一维护；事件只触发复核，不直接给出买卖结论</div>
   </div>
   <div class="d-flex gap-2">
     <button id="syncBtn" class="btn btn-outline-secondary btn-sm" onclick="syncEarnings()">
-      <i class="bi bi-cloud-download me-1"></i>同步财报
+      <i class="bi bi-cloud-download me-1"></i>同步未来事件
     </button>
     <a href="{{ url_for('catalyst_add') }}" class="btn btn-success btn-sm">
       <i class="bi bi-plus-circle me-1"></i>添加
@@ -104,9 +105,6 @@
   <span class="cat-chip chip-week"><i class="bi bi-calendar-week me-1"></i>本周 {{ this_week|length }}</span>
   <span class="cat-chip chip-month"><i class="bi bi-calendar-month me-1"></i>本月 {{ this_month|length }}</span>
   <span class="cat-chip chip-later"><i class="bi bi-calendar3 me-1"></i>更远 {{ later|length }}</span>
-  {% if macro_events %}
-  <span class="cat-chip chip-macro"><i class="bi bi-globe2 me-1"></i>宏观事件 {{ macro_events|length }}</span>
-  {% endif %}
 </div>
 
 {# ── 待评估 ── #}
@@ -175,66 +173,6 @@
 </div>
 {% endif %}
 
-{# ── 宏观事件 ── #}
-{% if macro_events %}
-<div class="mb-4" id="macro-section">
-  <div class="d-flex align-items-center justify-content-between mb-2">
-    <div class="cat-section-label label-macro" style="margin-bottom:0;">
-      <i class="bi bi-globe2 me-1"></i>宏观事件（{{ macro_events|length }} 个）
-    </div>
-    <a href="{{ url_for('monitor') }}" class="btn btn-sm btn-outline-secondary" style="font-size:.75rem;">
-      <i class="bi bi-gear me-1"></i>管理
-    </a>
-  </div>
-  {% for ev in macro_events %}
-  <div class="cat-card card-macro mb-2">
-    <div class="d-flex justify-content-between align-items-start mb-2">
-      <div>
-        <span class="cat-type-badge type-macro me-2">宏观</span>
-        <span class="fw-semibold" style="font-size:.92rem;">{{ ev.title }}</span>
-      </div>
-    </div>
-    {% if ev.thesis %}
-    <div class="mb-2" style="font-size:.82rem; color:var(--text-muted);">
-      <i class="bi bi-lightbulb me-1" style="color:var(--yellow);"></i>{{ ev.thesis }}
-    </div>
-    {% endif %}
-    {% if ev.tickers_list %}
-    <div class="d-flex flex-wrap gap-1 mb-2">
-      {% for t in ev.tickers_list %}
-      <span class="cat-ticker-chip"><span class="ticker-sym">{{ t }}</span></span>
-      {% endfor %}
-    </div>
-    {% endif %}
-    {% if ev.dates_parsed %}
-    <div class="macro-dates-list">
-      {% for rd in ev.dates_parsed %}
-      <div class="macro-date-row {{ 'macro-due' if rd.is_due else ('macro-past' if rd.is_past else '') }}" id="macro-{{ ev.id }}-{{ rd.date }}">
-        {% if rd.is_due %}
-        <i class="bi bi-alarm-fill me-1" style="color:#fd7e14;"></i>
-        {% elif rd.is_past %}
-        <i class="bi bi-check-circle me-1" style="color:var(--text-muted);"></i>
-        {% else %}
-        <i class="bi bi-calendar3 me-1" style="color:var(--text-muted);"></i>
-        {% endif %}
-        <span class="macro-date-label">{{ rd.date }}</span>
-        <span class="macro-date-text">{{ rd.label }}</span>
-        {% if rd.is_due %}
-        <span class="badge-macro-due ms-auto">⚡ 即将到达</span>
-        {% elif rd.is_past %}
-        <span class="badge-macro-past ms-auto">已过</span>
-        {% else %}
-        <span class="badge-macro-left ms-auto">{{ rd.days_left }}天</span>
-        {% endif %}
-      </div>
-      {% endfor %}
-    </div>
-    {% endif %}
-  </div>
-  {% endfor %}
-</div>
-{% endif %}
-
 {# ── 更远 ── #}
 {% if later %}
 <div class="mb-4">
@@ -279,14 +217,14 @@
 </div>
 {% endif %}
 
-{% if not needs_review and not overdue and not this_week and not this_month and not later and not past and not macro_events %}
+  {% if not needs_review and not overdue and not this_week and not this_month and not later and not past %}
 <div class="card">
   <div class="empty-state py-5">
     <i class="bi bi-lightning d-block mb-2" style="font-size:2rem;opacity:.3;"></i>
-    <div style="font-size:.9rem;">还没有催化剂记录</div>
-    <div class="text-muted mt-1" style="font-size:.82rem;">点"同步财报"自动导入，或手动添加</div>
+    <div style="font-size:.9rem;">还没有事件记录</div>
+    <div class="text-muted mt-1" style="font-size:.82rem;">同步会导入未来 180 天的持仓/关注股财报；宏观事件目前由人工维护</div>
     <div class="d-flex gap-2 justify-content-center mt-3">
-      <button class="btn btn-outline-secondary btn-sm" onclick="syncEarnings()"><i class="bi bi-cloud-download me-1"></i>同步财报</button>
+      <button class="btn btn-outline-secondary btn-sm" onclick="syncEarnings()"><i class="bi bi-cloud-download me-1"></i>同步未来事件</button>
       <a href="{{ url_for('catalyst_add') }}" class="btn btn-success btn-sm"><i class="bi bi-plus-circle me-1"></i>手动添加</a>
     </div>
   </div>
@@ -388,7 +326,6 @@
 <script>
 /* ── Calendar state ── */
 const CAL_CATALYST = {{ cal_catalyst | tojson }};
-const CAL_MACRO    = {{ macro_cal_events | tojson }};
 const TODAY_STR    = "{{ today }}";
 
 let calOffset  = 0;
@@ -409,8 +346,7 @@ function buildEvMap() {
     if (!evMap[date]) evMap[date] = [];
     evMap[date].push({ type, title });
   };
-  CAL_CATALYST.forEach(e => add(e.date, 'earnings', e.title));
-  CAL_MACRO.forEach(e    => add(e.date, 'macro',    e.label));
+  CAL_CATALYST.forEach(e => add(e.date, e.type||'earnings', e.title));
   marketData.dividends.forEach(e => add(e.date, 'dividend', `${e.ticker} ${e.amount}`));
   marketData.ipos.forEach(e      => add(e.date, 'ipo',      `IPO: ${e.name || e.ticker}`));
   marketData.splits.forEach(e    => add(e.date, 'split',    `${e.ticker} ${e.content}`));
@@ -513,14 +449,6 @@ function scrollToEvent(ev, dateStr) {
       return;
     }
   }
-  for (const row of document.querySelectorAll('.macro-date-row')) {
-    if (row.querySelector('.macro-date-label')?.textContent.trim() === dateStr) {
-      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      row.style.outline = '2px solid #9b59b6';
-      setTimeout(() => row.style.outline = '', 1500);
-      return;
-    }
-  }
 }
 
 function shiftMonth(delta) {
@@ -543,13 +471,14 @@ function loadMarketCalendar() {
     });
 }
 
-/* ── Sync earnings ── */
+/* ── Sync Longbridge calendars ── */
 function syncEarnings() {
   const btn = document.getElementById('syncBtn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>同步中...';
-  fetch('/api/sync_earnings', { method: 'POST' })
-    .then(r => r.json())
+  const token = document.querySelector('meta[name="csrf-token"]')?.content;
+  fetch('/api/sync_earnings', { method: 'POST', headers:{'X-CSRFToken':token}, signal:AbortSignal.timeout(120000) })
+    .then(async r => { const data = await r.json(); if (!r.ok) throw new Error(data.error || '同步失败'); return data; })
     .then(data => {
       if (data.added > 0) {
         btn.innerHTML = `<i class="bi bi-check me-1"></i>新增 ${data.added} 条`;
@@ -559,14 +488,14 @@ function syncEarnings() {
         btn.innerHTML = '<i class="bi bi-check me-1"></i>已最新';
         btn.disabled = false;
         setTimeout(() => {
-          btn.innerHTML = '<i class="bi bi-cloud-download me-1"></i>同步财报';
+          btn.innerHTML = '<i class="bi bi-cloud-download me-1"></i>同步未来事件';
           btn.classList.replace('btn-outline-success', 'btn-outline-secondary');
         }, 2000);
       }
     })
-    .catch(() => {
+    .catch(err => {
       btn.disabled = false;
-      btn.innerHTML = '<i class="bi bi-cloud-download me-1"></i>同步财报';
+      btn.innerHTML = '<i class="bi bi-exclamation-triangle me-1"></i>' + err.message;
     });
 }
 

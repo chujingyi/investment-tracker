@@ -430,3 +430,78 @@ body {
 .status-skipped { font-size: .78rem; font-weight: 600; color: var(--text-muted); }
 .impact-star { color: #f59e0b; }
 .impact-empty { color: #e5e7eb; }
+.lifecycle-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: .2rem .58rem;
+  font-size: .75rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.lifecycle-holding { background: rgba(25,135,84,.12); color: #157347; }
+.lifecycle-sold { background: rgba(13,110,253,.1); color: #0a58ca; }
+.lifecycle-watching { background: rgba(255,193,7,.18); color: #8a6200; }
+.lifecycle-archived { background: rgba(108,117,125,.12); color: #6c757d; }
+
+.stock-tabs {
+  display: flex;
+  gap: .35rem;
+  padding: .3rem;
+  border: 1px solid var(--border);
+  border-radius: .75rem;
+  background: var(--card-bg, #fff);
+  overflow-x: auto;
+}
+.stock-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: .42rem;
+  padding: .48rem .85rem;
+  border-radius: .55rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: .84rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.stock-tab:hover { background: var(--hover); color: var(--text); }
+.stock-tab.active { background: #0969da; color: #fff; }
+.stock-tab span {
+  min-width: 1.3rem;
+  padding: .02rem .32rem;
+  border-radius: 999px;
+  background: rgba(108,117,125,.12);
+  text-align: center;
+  font-size: .72rem;
+}
+.stock-tab.active span { background: rgba(255,255,255,.2); }
+.entry-holding { background: rgba(25,135,84,.13); color: #157347; }
+.entry-exited { background: rgba(108,117,125,.13); color: #5c636a; }
+.entry-review { background: rgba(255,193,7,.2); color: #8a6200; }
+
+.stock-timeline { position: relative; }
+.timeline-item { position: relative; padding: 0 0 1.1rem 1.45rem; }
+.timeline-item:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: .34rem;
+  top: .68rem;
+  bottom: -.15rem;
+  width: 1px;
+  background: var(--border);
+}
+.timeline-dot {
+  position: absolute;
+  left: 0;
+  top: .35rem;
+  width: .7rem;
+  height: .7rem;
+  border-radius: 50%;
+  background: #6c757d;
+  box-shadow: 0 0 0 3px var(--card-bg, #fff);
+}
+.timeline-buy .timeline-dot { background: #dc3545; }
+.timeline-sell .timeline-dot { background: #198754; }
+.timeline-recommendation .timeline-dot { background: #0d6efd; }
+.timeline-body { min-width: 0; }

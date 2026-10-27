@@ -1,3 +1,14 @@
+---
+AIGC:
+  ContentProducer: '001191110102MAD55U9H0F10002'
+  ContentPropagator: '001191110102MAD55U9H0F10002'
+  Label: '1'
+  ProduceID: '1fef525f-63c8-41d8-b45c-acbceb4b5b7e'
+  PropagateID: '1fef525f-63c8-41d8-b45c-acbceb4b5b7e'
+  ReservedCode1: '86185981-935c-47d3-b471-9dd4202284f4'
+  ReservedCode2: '86185981-935c-47d3-b471-9dd4202284f4'
+---
+
 # NAV 折价套利框架
 > 整理自 X 博主 Serenity（@aleabitoreddit）的「1 my 2」方法论，结合亚洲控股公司折价案例
 
@@ -166,3 +177,5 @@ WUS 的主业是 PCB，AI 数据中心是 PCB 需求增长最快的场景之一 
 - 催化剂早期阶段（公开信刚发）：小仓观察（5-10%）
 - 催化剂加速（管理层回应 + IPO 申请推进）：加仓（15-20%）
 - 折价收窄至 < 30% 或 thesis 失效：减仓退出
+
+> AI生成
